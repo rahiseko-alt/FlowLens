@@ -22,6 +22,7 @@ from flowlens.core.models import (
 )
 from flowlens.core.redaction import extract_browser_domain
 from flowlens.core.storage import Storage
+from flowlens.core.summary import generate_summary
 
 MANIFEST_VERSION = "0.1.0"
 
@@ -462,6 +463,8 @@ class Recorder:
             }
             manifest_json = json.dumps(manifest, indent=2, ensure_ascii=False)
             redaction_report_json = json.dumps(redaction_report, indent=2, ensure_ascii=False)
+            summary_data = generate_summary(temp_db_path)
+            summary_json = json.dumps(summary_data, indent=2, ensure_ascii=False)
 
             # Build AES-256 ZIP using pyzipper
             with pyzipper.AESZipFile(
@@ -474,5 +477,6 @@ class Recorder:
                 zf.write(temp_db_path, arcname="data.sqlite")
                 zf.writestr("manifest.json", manifest_json)
                 zf.writestr("redaction_report.json", redaction_report_json)
+                zf.writestr("summary.json", summary_json)
 
         return dest_path
