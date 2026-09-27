@@ -8,6 +8,24 @@
 
 ---
 
+## 2026-09-27 インストーラーを GitHub で自動作成し、配布ページに置いた
+
+**決めたこと**
+
+- GitHub の Windows 環境で、試験・exe 作成・起動確認（`--self-check`）・インストーラー作成を自動で行う（`.github/workflows/build-windows.yml`）
+- `v` で始まるタグを付けると、インストーラーが Releases ページに「実機確認前」として置かれる。最初は `v0.2.0`
+- 署名していないので、初回は Windows が「PC が保護されました」と警告する（「詳細情報」→「実行」で入る）
+
+**次にやること**
+
+- 利用者が Releases から `flowlens_installer.exe` を入れ、`docs/manual-checks.md` の順に確かめる
+- 見つかった問題を Issue にして直し、直したら新しいタグ（`v0.2.1` など）で配り直す
+- 分析側の設計を再開する（`/grill-with-docs` の Q1〜Q7 が回答待ち）
+
+**未解決の問題**
+
+- 自動の起動確認は「部品が揃って記録できる」ことまで。画面・アイコン・フックが実際の操作で動くかは、実機でないと分からない
+
 ## 2026-09-27 Collector を作り直して main に取り込んだ
 
 **決めたこと**
@@ -76,25 +94,6 @@
 - https://github.com/rahiseko-alt/FlowLens/pull/1 → https://github.com/rahiseko-alt/FlowLens/pull/2 の順に取り込む
 - `/implement` で https://github.com/rahiseko-alt/FlowLens/issues/5 から始める
 - 並行して、利用者の Windows PC で https://github.com/rahiseko-alt/FlowLens/issues/4 を行う
-- `README.md` の冒頭を FlowLens の説明に書き換える
-
-**未解決の問題**
-
-- 過去分の読み込み元で本当に何が読めるか、管理者権限が要る元を社員本人のインストールで読めるかは、Windows 実機で未確認
-- 題名をハッシュにした粒度で業務を見分けられるかは、実データで確かめるまで分からない
-
-## 2026-09-27 Collector MVP の仕様書を発行
-
-**決めたこと**
-
-- 仕様書を https://github.com/rahiseko-alt/FlowLens/issues/3 として発行した（`ready-for-agent`）
-- 自動テストは「入口と出口の1か所」で行う。偽の操作・偽の過去記録を記録の中核に流し、書き出した1ファイルの中身だけを確かめる。Windows とやり取りする薄い部分は実機で手順書どおりに確かめる
-
-**次にやること**
-
-- https://github.com/rahiseko-alt/FlowLens/pull/1 → https://github.com/rahiseko-alt/FlowLens/pull/2 の順に取り込む
-- `/to-tickets` で仕様書を作業単位に割る
-- そのあと `/implement`。最初の作業単位で、Past Import の読み込み元が実機で読めるか（管理者権限の要否を含む）を確かめる
 - `README.md` の冒頭を FlowLens の説明に書き換える
 
 **未解決の問題**
