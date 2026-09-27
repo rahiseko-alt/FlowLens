@@ -73,12 +73,21 @@ CREATE TABLE IF NOT EXISTS control_events (
     source TEXT NOT NULL DEFAULT 'live'
 );
 
+CREATE TABLE IF NOT EXISTS excluded_intervals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    start_time TEXT NOT NULL,
+    end_time TEXT NOT NULL,
+    duration_seconds REAL NOT NULL,
+    reason TEXT NOT NULL DEFAULT 'excluded_app'
+);
+
 CREATE INDEX IF NOT EXISTS idx_app_sessions_time ON app_sessions(start_time, end_time);
 CREATE INDEX IF NOT EXISTS idx_app_sessions_app ON app_sessions(app_name);
 CREATE INDEX IF NOT EXISTS idx_typing_time ON typing_activities(start_time, end_time);
 CREATE INDEX IF NOT EXISTS idx_operation_time ON operation_types(timestamp);
 CREATE INDEX IF NOT EXISTS idx_clipboard_time ON clipboard_transfers(copy_time);
 CREATE INDEX IF NOT EXISTS idx_control_time ON control_events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_excluded_time ON excluded_intervals(start_time, end_time);
 """
 
 
@@ -145,6 +154,34 @@ class Storage:
                     duration_seconds,
                     is_past,
                     source,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def insert_excluded_interval(
+        self,
+        start_time: datetime,
+        end_time: datetime,
+        duration_seconds: float,
+        reason: str = "excluded_app",
+    ) -> None:
+        if duration_seconds <= 0:
+            return
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO excluded_intervals (
+                    start_time, end_time, duration_seconds, reason
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (
+                    start_time.isoformat(),
+                    end_time.isoformat(),
+                    duration_seconds,
+                    reason,
                 ),
             )
             conn.commit()
@@ -335,139 +372,196 @@ class Storage:
             conn.close()
 
     def export_subset(
-        self, target_db_path: str | Path, start: datetime, end: datetime
-    ) -> None:
-        """Exports a subset of SQLite database into target_db_path for the given time range."""
+        self,
+        target_db_path: str | Path,
+        start: datetime,
+        end: datetime,
+        excluded_apps: set[str] | None = None,
+    ) -> dict[str, int]:
+        """Exports a subset of SQLite database into target_db_path for the given time range,
+
+        applying re-redaction against excluded_apps and returning redaction counts.
+        """
+        ex_apps = {a.lower().strip() for a in (excluded_apps or set())}
         target_path = Path(target_db_path)
         if target_path.exists():
             target_path.unlink()
         target_storage = Storage(target_path)
 
+        redacted_sessions = 0
+        redacted_typing = 0
+        redacted_operations = 0
+        redacted_clipboard = 0
+        redacted_control = 0
+
         sessions = self.get_app_sessions(start=start, end=end)
         conn = target_storage._connect()
         try:
             for s in sessions:
-                conn.execute(
-                    """
-                    INSERT INTO app_sessions (
-                        app_name, window_title_hash, window_title_ext,
-                        start_time, end_time, duration_seconds, is_past, source
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        s["app_name"],
-                        s["window_title_hash"],
-                        s["window_title_ext"],
-                        s["start_time"],
-                        s["end_time"],
-                        s["duration_seconds"],
-                        s["is_past"],
-                        s["source"],
-                    ),
-                )
+                if s["app_name"].lower() in ex_apps:
+                    redacted_sessions += 1
+                    # Convert redacted session to excluded_intervals
+                    conn.execute(
+                        """
+                        INSERT INTO excluded_intervals (
+                            start_time, end_time, duration_seconds, reason
+                        ) VALUES (?, ?, ?, ?)
+                        """,
+                        (s["start_time"], s["end_time"], s["duration_seconds"], "excluded_app"),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO app_sessions (
+                            app_name, window_title_hash, window_title_ext,
+                            start_time, end_time, duration_seconds, is_past, source
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            s["app_name"],
+                            s["window_title_hash"],
+                            s["window_title_ext"],
+                            s["start_time"],
+                            s["end_time"],
+                            s["duration_seconds"],
+                            s["is_past"],
+                            s["source"],
+                        ),
+                    )
 
-            # Export typing activities in time range
             src_conn = self._connect()
             try:
+                # Export typing activities
                 cur = src_conn.execute(
                     "SELECT * FROM typing_activities WHERE end_time >= ? AND start_time <= ?",
                     (start.isoformat(), end.isoformat()),
                 )
                 for t in cur.fetchall():
-                    conn.execute(
-                        """
-                        INSERT INTO typing_activities (
-                            app_name, window_title_hash, start_time, end_time,
-                            duration_seconds, keystroke_count, is_password, is_past, source
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            t["app_name"],
-                            t["window_title_hash"],
-                            t["start_time"],
-                            t["end_time"],
-                            t["duration_seconds"],
-                            t["keystroke_count"],
-                            t["is_password"],
-                            t["is_past"],
-                            t["source"],
-                        ),
-                    )
+                    if t["app_name"].lower() in ex_apps:
+                        redacted_typing += 1
+                    else:
+                        conn.execute(
+                            """
+                            INSERT INTO typing_activities (
+                                app_name, window_title_hash, start_time, end_time,
+                                duration_seconds, keystroke_count, is_password, is_past, source
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                t["app_name"],
+                                t["window_title_hash"],
+                                t["start_time"],
+                                t["end_time"],
+                                t["duration_seconds"],
+                                t["keystroke_count"],
+                                t["is_password"],
+                                t["is_past"],
+                                t["source"],
+                            ),
+                        )
 
-                # Export operation types in time range
+                # Export operation types
                 cur = src_conn.execute(
                     "SELECT * FROM operation_types WHERE timestamp >= ? AND timestamp <= ?",
                     (start.isoformat(), end.isoformat()),
                 )
                 for op in cur.fetchall():
-                    conn.execute(
-                        """
-                        INSERT INTO operation_types (
-                            app_name, operation_type, timestamp, is_past, source
-                        ) VALUES (?, ?, ?, ?, ?)
-                        """,
-                        (
-                            op["app_name"],
-                            op["operation_type"],
-                            op["timestamp"],
-                            op["is_past"],
-                            op["source"],
-                        ),
-                    )
+                    if op["app_name"].lower() in ex_apps:
+                        redacted_operations += 1
+                    else:
+                        conn.execute(
+                            """
+                            INSERT INTO operation_types (
+                                app_name, operation_type, timestamp, is_past, source
+                            ) VALUES (?, ?, ?, ?, ?)
+                            """,
+                            (
+                                op["app_name"],
+                                op["operation_type"],
+                                op["timestamp"],
+                                op["is_past"],
+                                op["source"],
+                            ),
+                        )
 
-                # Export clipboard transfers in time range
+                # Export clipboard transfers
                 cur = src_conn.execute(
                     "SELECT * FROM clipboard_transfers WHERE copy_time >= ? AND copy_time <= ?",
                     (start.isoformat(), end.isoformat()),
                 )
                 for cb in cur.fetchall():
-                    conn.execute(
-                        """
-                        INSERT INTO clipboard_transfers (
-                            source_app, target_app, data_type, data_length,
-                            copy_time, paste_time, is_past, source
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            cb["source_app"],
-                            cb["target_app"],
-                            cb["data_type"],
-                            cb["data_length"],
-                            cb["copy_time"],
-                            cb["paste_time"],
-                            cb["is_past"],
-                            cb["source"],
-                        ),
+                    src_excluded = cb["source_app"].lower() in ex_apps
+                    tgt_excluded = (
+                        cb["target_app"].lower() in ex_apps if cb["target_app"] else False
                     )
+                    if src_excluded or tgt_excluded:
+                        redacted_clipboard += 1
+                    else:
+                        conn.execute(
+                            """
+                            INSERT INTO clipboard_transfers (
+                                source_app, target_app, data_type, data_length,
+                                copy_time, paste_time, is_past, source
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                cb["source_app"],
+                                cb["target_app"],
+                                cb["data_type"],
+                                cb["data_length"],
+                                cb["copy_time"],
+                                cb["paste_time"],
+                                cb["is_past"],
+                                cb["source"],
+                            ),
+                        )
 
-                # Export control events in time range
+                # Export control events
                 cur = src_conn.execute(
                     "SELECT * FROM control_events WHERE timestamp >= ? AND timestamp <= ?",
                     (start.isoformat(), end.isoformat()),
                 )
                 for ce in cur.fetchall():
+                    if ce["app_name"].lower() in ex_apps:
+                        redacted_control += 1
+                    else:
+                        conn.execute(
+                            """
+                            INSERT INTO control_events (
+                                app_name, window_title_hash, event_type, control_type,
+                                automation_id, class_name, framework_id, state,
+                                browser_domain, timestamp, is_past, source
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                ce["app_name"],
+                                ce["window_title_hash"],
+                                ce["event_type"],
+                                ce["control_type"],
+                                ce["automation_id"],
+                                ce["class_name"],
+                                ce["framework_id"],
+                                ce["state"],
+                                ce["browser_domain"],
+                                ce["timestamp"],
+                                ce["is_past"],
+                                ce["source"],
+                            ),
+                        )
+
+                # Export existing excluded intervals
+                cur = src_conn.execute(
+                    "SELECT * FROM excluded_intervals WHERE end_time >= ? AND start_time <= ?",
+                    (start.isoformat(), end.isoformat()),
+                )
+                for ex in cur.fetchall():
                     conn.execute(
                         """
-                        INSERT INTO control_events (
-                            app_name, window_title_hash, event_type, control_type,
-                            automation_id, class_name, framework_id, state,
-                            browser_domain, timestamp, is_past, source
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO excluded_intervals (
+                            start_time, end_time, duration_seconds, reason
+                        ) VALUES (?, ?, ?, ?)
                         """,
-                        (
-                            ce["app_name"],
-                            ce["window_title_hash"],
-                            ce["event_type"],
-                            ce["control_type"],
-                            ce["automation_id"],
-                            ce["class_name"],
-                            ce["framework_id"],
-                            ce["state"],
-                            ce["browser_domain"],
-                            ce["timestamp"],
-                            ce["is_past"],
-                            ce["source"],
-                        ),
+                        (ex["start_time"], ex["end_time"], ex["duration_seconds"], ex["reason"]),
                     )
             finally:
                 src_conn.close()
@@ -475,3 +569,20 @@ class Storage:
             conn.commit()
         finally:
             conn.close()
+
+        total_redacted = (
+            redacted_sessions
+            + redacted_typing
+            + redacted_operations
+            + redacted_clipboard
+            + redacted_control
+        )
+        return {
+            "excluded_apps_count": len(ex_apps),
+            "redacted_sessions": redacted_sessions,
+            "redacted_typing_activities": redacted_typing,
+            "redacted_operation_types": redacted_operations,
+            "redacted_clipboard_transfers": redacted_clipboard,
+            "redacted_control_events": redacted_control,
+            "total_redacted_records": total_redacted,
+        }

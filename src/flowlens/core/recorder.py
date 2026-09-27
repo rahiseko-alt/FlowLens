@@ -51,6 +51,7 @@ class Recorder:
         self._active_end: datetime | None = None
 
         self._is_paused = False
+        self._pause_start: datetime | None = None
         self._excluded_apps: set[str] = set()
         self._retention_days: int = 30
         self._idle_threshold_seconds: float = 300.0
@@ -83,12 +84,25 @@ class Recorder:
             or self._is_disconnected
         )
 
-    def pause(self) -> None:
+    def pause(self, timestamp: datetime | None = None) -> None:
         self.flush()
         self._is_paused = True
+        self._pause_start = timestamp or self.clock()
 
-    def resume(self) -> None:
-        self._is_paused = False
+    def resume(self, timestamp: datetime | None = None) -> None:
+        if self._is_paused:
+            self._is_paused = False
+            resume_time = timestamp or self.clock()
+            if self._pause_start is not None:
+                duration = (resume_time - self._pause_start).total_seconds()
+                if duration > 0:
+                    self.storage.insert_excluded_interval(
+                        start_time=self._pause_start,
+                        end_time=resume_time,
+                        duration_seconds=duration,
+                        reason="pause",
+                    )
+            self._pause_start = None
 
     def set_excluded_apps(self, apps: list[str]) -> None:
         self._excluded_apps = {app.lower().strip() for app in apps}
@@ -127,6 +141,9 @@ class Recorder:
             return
 
         app_name = obs.app_name or self._active_app or "Unknown"
+        if app_name.lower() in self._excluded_apps:
+            return
+
         title_hash = self._active_title_hash
         domain = extract_browser_domain(obs.url)
 
@@ -150,6 +167,9 @@ class Recorder:
             return
 
         app_name = obs.app_name or self._active_app or "Unknown"
+        if app_name.lower() in self._excluded_apps:
+            return
+
         title_hash = self._active_title_hash
         start_time = obs.timestamp
         duration = max(0.0, obs.duration_seconds)
@@ -176,6 +196,8 @@ class Recorder:
 
         op = obs.operation_type.lower()
         app_name = obs.app_name or self._active_app or "Unknown"
+        if app_name.lower() in self._excluded_apps:
+            return
 
         self.storage.insert_operation_type(
             app_name=app_name,
@@ -198,6 +220,8 @@ class Recorder:
 
         action = obs.action.lower()
         app_name = obs.app_name or self._active_app or "Unknown"
+        if app_name.lower() in self._excluded_apps:
+            return
 
         if action in ("copy", "cut"):
             # If there was a previous unpasted copy, commit it with empty target_app
@@ -222,8 +246,16 @@ class Recorder:
     ) -> None:
         if not self._pending_copy:
             return
+        source_app = self._pending_copy["source_app"]
+        if (
+            source_app.lower() in self._excluded_apps
+            or target_app.lower() in self._excluded_apps
+        ):
+            self._pending_copy = None
+            return
+
         self.storage.insert_clipboard_transfer(
-            source_app=self._pending_copy["source_app"],
+            source_app=source_app,
             target_app=target_app,
             data_type=self._pending_copy["data_type"],
             data_length=self._pending_copy["data_length"],
@@ -272,7 +304,11 @@ class Recorder:
 
         app_name = obs.app_name
         timestamp = obs.timestamp
-        title_hash, title_ext = self.key_manager.hash_title(obs.window_title)
+        if app_name.lower() in self._excluded_apps:
+            title_hash = ""
+            title_ext = ""
+        else:
+            title_hash, title_ext = self.key_manager.hash_title(obs.window_title)
 
         if self._active_app is None:
             # First observation
@@ -307,16 +343,24 @@ class Recorder:
         final_end = end_time or self._active_end or self._active_start
         duration = (final_end - self._active_start).total_seconds()
         if duration > 0:
-            self.storage.insert_app_session(
-                app_name=self._active_app,
-                window_title_hash=self._active_title_hash,
-                window_title_ext=self._active_title_ext,
-                start_time=self._active_start,
-                end_time=final_end,
-                duration_seconds=duration,
-                is_past=0,
-                source="live",
-            )
+            if self._active_app.lower() in self._excluded_apps:
+                self.storage.insert_excluded_interval(
+                    start_time=self._active_start,
+                    end_time=final_end,
+                    duration_seconds=duration,
+                    reason="excluded_app",
+                )
+            else:
+                self.storage.insert_app_session(
+                    app_name=self._active_app,
+                    window_title_hash=self._active_title_hash,
+                    window_title_ext=self._active_title_ext,
+                    start_time=self._active_start,
+                    end_time=final_end,
+                    duration_seconds=duration,
+                    is_past=0,
+                    source="live",
+                )
         self._active_start = None
         self._active_end = None
         self._active_app = None
@@ -364,7 +408,12 @@ class Recorder:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             temp_db_path = Path(tmpdir) / "data.sqlite"
-            self.storage.export_subset(temp_db_path, start=time_range.start, end=time_range.end)
+            redaction_report = self.storage.export_subset(
+                temp_db_path,
+                start=time_range.start,
+                end=time_range.end,
+                excluded_apps=self._excluded_apps,
+            )
 
             session_count = self.storage.count_sessions(start=time_range.start, end=time_range.end)
             machine_id = self.key_manager.get_machine_id()
@@ -382,6 +431,7 @@ class Recorder:
                 },
             }
             manifest_json = json.dumps(manifest, indent=2, ensure_ascii=False)
+            redaction_report_json = json.dumps(redaction_report, indent=2, ensure_ascii=False)
 
             # Build AES-256 ZIP using pyzipper
             with pyzipper.AESZipFile(
@@ -393,5 +443,6 @@ class Recorder:
                 zf.setpassword(password.encode("utf-8"))
                 zf.write(temp_db_path, arcname="data.sqlite")
                 zf.writestr("manifest.json", manifest_json)
+                zf.writestr("redaction_report.json", redaction_report_json)
 
         return dest_path
