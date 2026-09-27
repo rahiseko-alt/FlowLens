@@ -4,6 +4,25 @@ handover.md の保存上限（5 件）を超えて押し出された古いメモ
 会話開始時には読み込まれない。過去の経緯を掘り返すときだけ開く。新しいものを一番上に来るよう足す。
 
 ---
+## 2026-09-27 仕様書を19個の作業単位に割って発行
+
+**決めたこと**
+
+- https://github.com/rahiseko-alt/FlowLens/issues/3 の子として、https://github.com/rahiseko-alt/FlowLens/issues/4 〜 https://github.com/rahiseko-alt/FlowLens/issues/22 の19件を発行した（すべて `ready-for-agent`。前提となる作業単位は各本文の「Blocked by」）
+- すぐ始められるのは2件: https://github.com/rahiseko-alt/FlowLens/issues/4（実機調査。利用者の Windows PC が要る）と https://github.com/rahiseko-alt/FlowLens/issues/5（最小の一本道）
+
+**次にやること**
+
+- https://github.com/rahiseko-alt/FlowLens/pull/1 → https://github.com/rahiseko-alt/FlowLens/pull/2 の順に取り込む
+- `/implement` で https://github.com/rahiseko-alt/FlowLens/issues/5 から始める
+- 並行して、利用者の Windows PC で https://github.com/rahiseko-alt/FlowLens/issues/4 を行う
+- `README.md` の冒頭を FlowLens の説明に書き換える
+
+**未解決の問題**
+
+- 過去分の読み込み元で本当に何が読めるか、管理者権限が要る元を社員本人のインストールで読めるかは、Windows 実機で未確認
+- 題名をハッシュにした粒度で業務を見分けられるかは、実データで確かめるまで分からない
+
 ## 2026-09-27 Collector MVP の仕様書を発行
 
 **決めたこと**

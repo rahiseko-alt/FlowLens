@@ -8,6 +8,23 @@
 
 ---
 
+## 2026-09-27 v0.2.1: FlowLens を見つけやすくした
+
+**決めたこと**
+
+- 初回の記録開始時に、アイコンの横へ吹き出しを出す。スタートメニューから FlowLens をもう一度開くと、設定・書き出しの画面が開く（https://github.com/rahiseko-alt/FlowLens/pull/27）
+- 過去分が読めなかった理由を日本語で出す。自動チェックで、完成した exe を8秒動かして落ちないか確かめる
+- 試験の1件が偶然（ランダムな記号の中に「abc」が現れる）で落ちたため、試験の値を直した
+
+**次にやること**
+
+- 利用者が v0.2.1 を上書きで入れ、`docs/manual-checks.md` の順に確かめる（書き出しはアイコン → 「設定・削除・診断データの書き出し」）
+- 分析側の設計を再開する（`/grill-with-docs` の Q1〜Q7 が回答待ち）
+
+**未解決の問題**
+
+- Windows はアイコンを「^」の中に隠すことがある。常に表示するかは利用者の Windows 設定しだい
+
 ## 2026-09-27 インストーラーを GitHub で自動作成し、配布ページに置いた
 
 **決めたこと**
@@ -81,23 +98,4 @@
 - Antigravity が `AGENTS.md` と `GEMINI.md` のどちらを優先するかは確証が無い（`AGENTS.md` の冒頭で `GEMINI.md` へ案内して補っている）
 - Antigravity が動く PC が Windows かどうかで、実機確認をどこまで Gemini が行えるかが変わる
 - 過去分の読み込み元で何が読めるかは、Windows 実機で未確認
-
-## 2026-09-27 仕様書を19個の作業単位に割って発行
-
-**決めたこと**
-
-- https://github.com/rahiseko-alt/FlowLens/issues/3 の子として、https://github.com/rahiseko-alt/FlowLens/issues/4 〜 https://github.com/rahiseko-alt/FlowLens/issues/22 の19件を発行した（すべて `ready-for-agent`。前提となる作業単位は各本文の「Blocked by」）
-- すぐ始められるのは2件: https://github.com/rahiseko-alt/FlowLens/issues/4（実機調査。利用者の Windows PC が要る）と https://github.com/rahiseko-alt/FlowLens/issues/5（最小の一本道）
-
-**次にやること**
-
-- https://github.com/rahiseko-alt/FlowLens/pull/1 → https://github.com/rahiseko-alt/FlowLens/pull/2 の順に取り込む
-- `/implement` で https://github.com/rahiseko-alt/FlowLens/issues/5 から始める
-- 並行して、利用者の Windows PC で https://github.com/rahiseko-alt/FlowLens/issues/4 を行う
-- `README.md` の冒頭を FlowLens の説明に書き換える
-
-**未解決の問題**
-
-- 過去分の読み込み元で本当に何が読めるか、管理者権限が要る元を社員本人のインストールで読めるかは、Windows 実機で未確認
-- 題名をハッシュにした粒度で業務を見分けられるかは、実データで確かめるまで分からない
 
