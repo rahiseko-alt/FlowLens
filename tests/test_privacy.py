@@ -161,7 +161,7 @@ def test_control_metadata_and_domain_only(recorder, export):
             automation_id="saveButton",
             class_name="Chrome_WidgetWin_1",
             framework_id="Chrome",
-            browser_domain="https://crm.example.com/customer/123?token=abc#x",
+            browser_domain="https://crm.example.com/customer/123?token=qzvw#x",
             app_name="chrome.exe",
         )
     )
@@ -171,7 +171,7 @@ def test_control_metadata_and_domain_only(recorder, export):
     assert row["control_type"] == "ButtonControl"
     assert row["automation_id"] == "saveButton"
     assert row["browser_domain"] == "crm.example.com"
-    for text in ("customer/123", "token", "abc", "顧客A"):
+    for text in ("customer/123", "token", "qzvw", "顧客A"):
         assert not exp.contains(text)
 
 
