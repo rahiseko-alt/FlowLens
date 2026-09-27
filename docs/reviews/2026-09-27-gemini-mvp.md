@@ -56,3 +56,10 @@
 
 - 中核（Linux で動く部分）: 49件の試験は通るが、試験の作りが甘い。上の漏れ1〜4は中核で直せる。
 - Windows 側: 起動・配線・検出の多くが未完成。実機で動いた形跡が無い。
+
+## その後（2026-09-27）
+
+- 利用者の指示で、Claude Code が中核と Windows 側を作り直した。上の指摘はすべて対応済み。
+- 作り直したあと、2軸の点検をもう一度行い、確認の点検も1回行った。そこで見つかった問題も直した。
+- 結果と残る課題は `docs/development-report.md` にまとめた。
+- https://github.com/rahiseko-alt/FlowLens/pull/23 は取り込まずに閉じる。作り直したものは https://github.com/rahiseko-alt/FlowLens/pull/24 に入っている。
