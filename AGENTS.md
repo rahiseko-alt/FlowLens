@@ -1,5 +1,7 @@
 # AGENTS.md
 
+> **Gemini / Antigravity: stop here and follow `GEMINI.md` instead.** Everything below is for Claude Code only.
+
 ## Agent skills
 
 Skills come from [mattpocock/skills](https://github.com/mattpocock/skills), installed into `.claude/skills/` with `npx skills add mattpocock/skills` and pinned in `skills-lock.json`. Do not edit them locally; update with `npx skills update`.
