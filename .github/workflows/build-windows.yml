@@ -49,6 +49,16 @@ jobs:
           $p = Start-Process -FilePath dist\flowlens\flowlens.exe -ArgumentList "--self-check" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "self-check failed: $($p.ExitCode)" }
 
+      - name: Packaged app runs for a few seconds (tray, hooks, watchers)
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP "flowlens-smoke"
+          $p = Start-Process -FilePath dist\flowlens\flowlens.exe -ArgumentList "--smoke", $dir -PassThru
+          if (-not $p.WaitForExit(60000)) { $p.Kill(); throw "smoke run did not stop" }
+          Get-Content (Join-Path $dir "logs\collector.log")
+          if ($p.ExitCode -ne 0) { throw "smoke run failed: $($p.ExitCode)" }
+          if (Select-String -Path (Join-Path $dir "logs\collector.log") -Pattern "crashed|failed:") { throw "errors in log" }
+
       - name: Build installer
         shell: pwsh
         run: |
