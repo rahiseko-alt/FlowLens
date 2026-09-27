@@ -22,161 +22,94 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Windows activity observation entry point for FlowLens.
+"""Foreground window and idle watcher.
 
-Observes foreground window transitions, user idle states, system lock/unlock,
-sleep/resume, and session disconnects, passing raw observations directly to
-FlowLens Core Recorder without inspection, retention, or local storage.
+Polls once a second and hands the foreground app and its title to the Recorder,
+which hashes the title before anything is stored. Idle is reported as starting at
+the last input, so the waiting time before it is noticed is not counted as work.
+Lock, sleep and disconnect arrive as window messages (see shell.py).
 """
 
+from __future__ import annotations
+
+import logging
 import threading
-import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import psutil
 import win32api
 import win32gui
 import win32process
 
-from flowlens.core.models import (
-    IdleObservation,
-    LockObservation,
-    SessionDisconnectObservation,
-    SleepObservation,
-    WindowObservation,
-)
-from flowlens.core.recorder import Recorder
+from flowlens.core import IdleObservation, Recorder, WindowObservation
+
+log = logging.getLogger("flowlens")
 
 
-class WindowsActivityWatcher:
-    """Thin Windows watcher for window focus, idle detection, and session state.
+def foreground_app() -> tuple[str, str]:
+    """(process name, window title) of the foreground window, or ("", "")."""
+    hwnd = win32gui.GetForegroundWindow()
+    if not hwnd:
+        return "", ""
+    try:
+        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        name = psutil.Process(pid).name() if pid > 0 else ""
+    except (psutil.Error, OSError):
+        name = ""
+    try:
+        title = win32gui.GetWindowText(hwnd) or ""
+    except win32gui.error:
+        title = ""
+    return name, title
 
-    Collects active foreground application name, window title, and user activity,
-    and forwards observations to FlowLens Recorder. Does not retain or persist
-    window titles or user content.
-    """
 
-    def __init__(
-        self,
-        recorder: Recorder,
-        poll_interval: float = 1.0,
-        idle_threshold_seconds: float = 300.0,
-    ) -> None:
+def idle_seconds() -> float:
+    """Seconds since the last keyboard or mouse input (tick counter wraps at 2^32 ms)."""
+    elapsed = (win32api.GetTickCount() - win32api.GetLastInputInfo()) & 0xFFFFFFFF
+    return elapsed / 1000.0
+
+
+class ActivityWatcher:
+    def __init__(self, recorder: Recorder, poll_interval: float = 1.0):
         self.recorder = recorder
         self.poll_interval = poll_interval
-        self.idle_threshold_seconds = idle_threshold_seconds
-
-        self._running = False
+        self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self._is_idle = False
-        self._last_app = ""
-        self._last_title = ""
+        self._idle = False
 
-    def get_foreground_window_info(self) -> tuple[str, str]:
-        """Queries the current foreground window process name and window title."""
-        hwnd = win32gui.GetForegroundWindow()
-        if not hwnd:
-            return "", ""
-
-        try:
-            _, pid = win32process.GetWindowThreadProcessId(hwnd)
-            if pid <= 0:
-                return "", ""
-            proc = psutil.Process(pid)
-            app_name = proc.name()
-        except (psutil.NoSuchProcess, psutil.AccessDenied, Exception):
-            app_name = "Unknown"
-
-        try:
-            title = win32gui.GetWindowText(hwnd) or ""
-        except Exception:
-            title = ""
-
-        return app_name, title
-
-    def get_idle_seconds(self) -> float:
-        """Returns the number of seconds since the last user input."""
-        try:
-            last_input = win32api.GetLastInputInfo()
-            tick_count = win32api.GetTickCount()
-            # Handle 32-bit tick wrap-around if necessary
-            elapsed_ms = max(0, tick_count - last_input)
-            return elapsed_ms / 1000.0
-        except Exception:
-            return 0.0
-
-    def poll_once(self, now: datetime | None = None) -> None:
-        """Performs a single observation cycle for window focus and idle state."""
-        current_time = now or datetime.now(timezone.utc)
-
-        # 1. Idle detection
-        idle_seconds = self.get_idle_seconds()
-        if idle_seconds >= self.idle_threshold_seconds:
-            if not self._is_idle:
-                self._is_idle = True
-                self.recorder.observe(IdleObservation(timestamp=current_time, is_idle=True))
-        else:
-            if self._is_idle:
-                self._is_idle = False
-                self.recorder.observe(IdleObservation(timestamp=current_time, is_idle=False))
-
-        # 2. Foreground window detection (only if not idle)
-        if not self._is_idle:
-            app_name, title = self.get_foreground_window_info()
-            if app_name:
-                self.recorder.observe(
-                    WindowObservation(
-                        timestamp=current_time,
-                        app_name=app_name,
-                        window_title=title,
-                    )
-                )
-
-    def handle_session_change(self, event_type: str, now: datetime | None = None) -> None:
-        """Handles Windows session changes (lock, unlock, disconnect, connect)."""
-        current_time = now or datetime.now(timezone.utc)
-        ev = event_type.lower()
-        if ev in ("lock", "session_lock"):
-            self.recorder.observe(LockObservation(timestamp=current_time, is_locked=True))
-        elif ev in ("unlock", "session_unlock"):
-            self.recorder.observe(LockObservation(timestamp=current_time, is_locked=False))
-        elif ev in ("disconnect", "session_disconnect"):
+    def poll_once(self) -> None:
+        now = datetime.now(timezone.utc)
+        idle = idle_seconds()
+        if idle >= self.recorder.idle_threshold_seconds:
+            if not self._idle:
+                self._idle = True
+                last_input = now - timedelta(seconds=idle)
+                self.recorder.observe(IdleObservation(timestamp=last_input, is_idle=True))
+            return
+        if self._idle:
+            self._idle = False
+            self.recorder.observe(IdleObservation(timestamp=now, is_idle=False))
+        app, title = foreground_app()
+        if app:
             self.recorder.observe(
-                SessionDisconnectObservation(timestamp=current_time, is_disconnected=True)
-            )
-        elif ev in ("connect", "session_connect"):
-            self.recorder.observe(
-                SessionDisconnectObservation(timestamp=current_time, is_disconnected=False)
+                WindowObservation(timestamp=now, app_name=app, window_title=title)
             )
 
-    def handle_power_event(self, event_type: str, now: datetime | None = None) -> None:
-        """Handles Windows power management events (sleep, resume)."""
-        current_time = now or datetime.now(timezone.utc)
-        ev = event_type.lower()
-        if ev in ("sleep", "suspend"):
-            self.recorder.observe(SleepObservation(timestamp=current_time, is_asleep=True))
-        elif ev in ("resume", "resume_automatic"):
-            self.recorder.observe(SleepObservation(timestamp=current_time, is_asleep=False))
-
-    def _loop(self) -> None:
-        while self._running:
+    def _run(self) -> None:
+        while not self._stop.is_set():
             try:
                 self.poll_once()
-            except Exception:
-                pass
-            time.sleep(self.poll_interval)
+            except Exception as exc:  # only the type: messages could carry titles
+                log.error("activity watcher cycle failed: %s", type(exc).__name__)
+            self._stop.wait(self.poll_interval)
 
     def start(self) -> None:
-        """Starts background monitoring loop."""
-        if self._running:
-            return
-        self._running = True
-        self._thread = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._run, name="activity", daemon=True)
+            self._thread.start()
 
     def stop(self) -> None:
-        """Stops background monitoring loop."""
-        self._running = False
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=2.0)
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=3)
             self._thread = None

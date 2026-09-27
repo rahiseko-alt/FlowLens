@@ -33,7 +33,7 @@ _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.:\-]{0,63}$")
 OPERATION_TYPES = frozenset({"ctrl+c", "ctrl+x", "ctrl+v", "enter", "tab", "escape", "shortcut"})
 CLIPBOARD_ACTIONS = frozenset({"copy", "cut", "paste"})
 CLIPBOARD_DATA_TYPES = frozenset({"text", "files", "image", "other"})
-CONTROL_EVENT_TYPES = frozenset({"click", "focus"})
+CONTROL_EVENT_TYPES = frozenset({"click", "focus", "navigate"})
 CONTROL_STATES = frozenset({"", "on", "off", "indeterminate", "expanded", "collapsed", "selected"})
 SYSTEM_EVENT_TYPES = frozenset(
     {"boot", "shutdown", "sleep", "resume", "logon", "logoff", "lock", "unlock"}
@@ -42,7 +42,7 @@ SYSTEM_EVENT_TYPES = frozenset(
 
 def file_extension(name: str | None) -> str:
     """Returns the last allowlisted extension found in `name` (".xlsx"), or ""."""
-    if not name:
+    if not name or not isinstance(name, str):
         return ""
     found = ""
     for match in _EXT_RE.finditer(name):
@@ -58,8 +58,8 @@ def app_name(raw: str | None) -> tuple[str, bool]:
     Returns (name, ok). When `ok` is False the value did not look like an app at
     all (it may be a document name) and must not be stored as-is.
     """
-    if not raw:
-        return "", True
+    if not raw or not isinstance(raw, str):
+        return "", bool(not raw)
     base = re.split(r"[\\/]", raw.strip())[-1].strip().lower()
     if _EXE_RE.match(base) or _AUMID_RE.match(base):
         return base, True
@@ -68,7 +68,7 @@ def app_name(raw: str | None) -> tuple[str, bool]:
 
 def domain(raw: str | None) -> str:
     """Reduces a host name or URL to a lowercase host. Anything else becomes ""."""
-    if not raw:
+    if not raw or not isinstance(raw, str):
         return ""
     value = raw.strip()
     if "://" in value:
@@ -92,14 +92,14 @@ def identifier(raw: str | None) -> str:
     Web pages sometimes put user content into automation ids; those contain
     spaces or other characters and are dropped.
     """
-    if not raw:
+    if not raw or not isinstance(raw, str):
         return ""
     value = raw.strip()
     return value if _IDENT_RE.match(value) else ""
 
 
 def choice(raw: str | None, allowed: frozenset[str], default: str = "") -> str:
-    value = (raw or "").strip().lower()
+    value = raw.strip().lower() if isinstance(raw, str) else ""
     return value if value in allowed else default
 
 
@@ -108,5 +108,5 @@ _ERROR_RE = re.compile(r"^[A-Za-z0-9_ .:-]{1,80}$")
 
 def error_code(raw: str | None) -> str:
     """Keeps a failure reason only if it is a short code (no paths, no messages)."""
-    value = (raw or "").strip()
+    value = raw.strip() if isinstance(raw, str) else ""
     return value if _ERROR_RE.match(value) and "\\" not in value and "/" not in value else ""

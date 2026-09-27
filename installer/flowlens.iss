@@ -32,6 +32,14 @@ Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 ; Configure auto-start on user login
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "FlowLens"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue
 
+[Run]
+; Start right after installation so the employee sees the consent screen.
+Filename: "{app}\{#MyAppExeName}"; Description: "FlowLens を起動する"; Flags: nowait postinstall
+
+[UninstallRun]
+; The collector must not be running while its files are removed.
+Filename: "{sys}\taskkill.exe"; Parameters: "/IM {#MyAppExeName} /F"; Flags: runhidden; RunOnceId: "StopFlowLens"
+
 [Code]
 // Custom uninstallation prompt: ask whether to keep or delete recorded data
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

@@ -22,256 +22,368 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Windows input, clipboard, UI control, and browser URL observation entry point.
+"""Keyboard, mouse, clipboard and UI-element observation without content (ADR 0002).
 
-Captures typing counts, operation types (Ctrl+C/V/X, Enter, Tab, Escape), clipboard
-change events without content, control metadata (without Name, Value, or TextPattern),
-and browser domains. Fixes DeskMate password detection and omits all text reading.
+- Keyboard: a low-level hook classifies each key press into a kind (a plain key,
+  ctrl+c/x/v, enter, tab, escape, shortcut). The key itself is never kept.
+- Mouse: only the fact of a left click; the point is used once to find the UI
+  element under it and then dropped.
+- Clipboard: the kind of data and its size, read from the memory block size.
+  The text or file names are never read.
+- UI elements: ControlType, AutomationId, ClassName, FrameworkId, toggle state and
+  whether it is a password box. Name, Value and TextPattern are not read.
+- Browser: the one exception to "no Value": the address bar of Chrome/Edge is read
+  once per page change, only while it is not being typed into, and cut down to its
+  host name on the spot (ADR 0002 permits the domain).
 """
 
+from __future__ import annotations
+
+import ctypes
+import logging
+import queue
 import threading
-import time
-from datetime import datetime, timezone
+from ctypes import wintypes
+from datetime import datetime, timedelta, timezone
 
-import psutil
 import uiautomation as auto
-import win32clipboard
 import win32gui
-import win32process
 
-from flowlens.core.models import (
+from flowlens.core import (
     ClipboardObservation,
     ControlMetadataObservation,
     OperationTypeObservation,
+    Recorder,
     TypingObservation,
+    sanitize,
 )
-from flowlens.core.recorder import Recorder
+from flowlens.windows.watcher import foreground_app
+
+log = logging.getLogger("flowlens")
+
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+
+WH_KEYBOARD_LL, WH_MOUSE_LL = 13, 14
+WM_KEYDOWN, WM_SYSKEYDOWN, WM_LBUTTONDOWN = 0x0100, 0x0104, 0x0201
+VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN = 0x11, 0x12, 0x5B, 0x5C
+MODIFIER_KEYS = {0x10, 0x11, 0x12, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, VK_LWIN, VK_RWIN, 0x14}
+PLAIN_OPS = {0x0D: "enter", 0x09: "tab", 0x1B: "escape"}
+CTRL_OPS = {0x43: "ctrl+c", 0x58: "ctrl+x", 0x56: "ctrl+v"}
+CF_BITMAP, CF_DIB, CF_UNICODETEXT, CF_HDROP = 2, 8, 13, 15
+BROWSERS = {"chrome.exe", "msedge.exe"}
+TYPING_PAUSE = timedelta(seconds=2)
+
+LRESULT = ctypes.c_ssize_t
+HOOKPROC = ctypes.WINFUNCTYPE(LRESULT, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
 
 
-def safe_is_password(control: auto.Control | None) -> bool:
-    """Safely determines if a control is a password input field.
+class KBDLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [
+        ("vkCode", wintypes.DWORD),
+        ("scanCode", wintypes.DWORD),
+        ("flags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.c_size_t),
+    ]
 
-    Fixes DeskMate's bug which queried non-existent CurrentIsPassword attribute.
-    Uses uiautomation's IsPassword property directly.
+
+class MSLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [
+        ("pt", wintypes.POINT),
+        ("mouseData", wintypes.DWORD),
+        ("flags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.c_size_t),
+    ]
+
+
+user32.SetWindowsHookExW.argtypes = [ctypes.c_int, HOOKPROC, wintypes.HINSTANCE, wintypes.DWORD]
+user32.SetWindowsHookExW.restype = wintypes.HHOOK
+user32.CallNextHookEx.argtypes = [wintypes.HHOOK, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM]
+user32.CallNextHookEx.restype = LRESULT
+user32.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
+user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+user32.GetAsyncKeyState.restype = ctypes.c_short
+user32.GetClipboardSequenceNumber.restype = wintypes.DWORD
+user32.OpenClipboard.argtypes = [wintypes.HWND]
+user32.IsClipboardFormatAvailable.argtypes = [wintypes.UINT]
+user32.GetClipboardData.argtypes = [wintypes.UINT]
+user32.GetClipboardData.restype = wintypes.HANDLE
+kernel32.GlobalSize.argtypes = [wintypes.HGLOBAL]
+kernel32.GlobalSize.restype = ctypes.c_size_t
+kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+shell32.DragQueryFileW.argtypes = [wintypes.HANDLE, wintypes.UINT, wintypes.LPWSTR, wintypes.UINT]
+shell32.DragQueryFileW.restype = wintypes.UINT
+
+
+def _down(vk: int) -> bool:
+    return bool(user32.GetAsyncKeyState(vk) & 0x8000)
+
+
+def classify_key(vk: int, is_sys: bool) -> str | None:
+    """The kind of a key press, never the key: None for modifiers alone."""
+    if vk in MODIFIER_KEYS:
+        return None
+    ctrl = _down(VK_CONTROL)
+    if ctrl and vk in CTRL_OPS:
+        return CTRL_OPS[vk]
+    if ctrl or is_sys or _down(VK_MENU) or _down(VK_LWIN) or _down(VK_RWIN):
+        return "shortcut"
+    return PLAIN_OPS.get(vk, "key")
+
+
+class InputHooks:
+    """Low-level keyboard and mouse hooks. Install and run on a thread with a message loop.
+
+    The callbacks only classify and enqueue; all work happens on InputWorker's thread,
+    so Windows never waits on us.
     """
-    if not control:
+
+    def __init__(self, events: queue.Queue):
+        self.events = events
+        self._keyboard_proc = HOOKPROC(self._on_key)
+        self._mouse_proc = HOOKPROC(self._on_mouse)
+        self._hooks: list[int] = []
+
+    def install(self) -> None:
+        module = kernel32.GetModuleHandleW(None)
+        for kind, proc in ((WH_KEYBOARD_LL, self._keyboard_proc), (WH_MOUSE_LL, self._mouse_proc)):
+            hook = user32.SetWindowsHookExW(kind, proc, module, 0)
+            if not hook:
+                raise ctypes.WinError(ctypes.get_last_error())
+            self._hooks.append(hook)
+
+    def uninstall(self) -> None:
+        while self._hooks:
+            user32.UnhookWindowsHookEx(self._hooks.pop())
+
+    def _on_key(self, code: int, wparam: int, lparam: int) -> int:
+        if code == 0 and wparam in (WM_KEYDOWN, WM_SYSKEYDOWN):
+            try:
+                vk = KBDLLHOOKSTRUCT.from_address(lparam).vkCode
+                kind = classify_key(vk, wparam == WM_SYSKEYDOWN)
+                if kind:
+                    self.events.put_nowait((kind, datetime.now(timezone.utc)))
+            except Exception:
+                pass  # a hook must never fail
+        return user32.CallNextHookEx(None, code, wparam, lparam)
+
+    def _on_mouse(self, code: int, wparam: int, lparam: int) -> int:
+        if code == 0 and wparam == WM_LBUTTONDOWN:
+            try:
+                pt = MSLLHOOKSTRUCT.from_address(lparam).pt
+                self.events.put_nowait(("click", datetime.now(timezone.utc), pt.x, pt.y))
+            except Exception:
+                pass
+        return user32.CallNextHookEx(None, code, wparam, lparam)
+
+
+def clipboard_shape() -> tuple[str, int]:
+    """(data type, size) of the clipboard, from memory block sizes only."""
+    if not user32.OpenClipboard(None):
+        return "other", 0
+    try:
+        if user32.IsClipboardFormatAvailable(CF_HDROP):
+            handle = user32.GetClipboardData(CF_HDROP)
+            return "files", int(
+                shell32.DragQueryFileW(handle, 0xFFFFFFFF, None, 0)
+            ) if handle else 0
+        if user32.IsClipboardFormatAvailable(CF_UNICODETEXT):
+            handle = user32.GetClipboardData(CF_UNICODETEXT)
+            size = kernel32.GlobalSize(handle) if handle else 0
+            return "text", max(0, size // 2 - 1)
+        if user32.IsClipboardFormatAvailable(CF_DIB) or user32.IsClipboardFormatAvailable(
+            CF_BITMAP
+        ):
+            return "image", 0
+        return "other", 0
+    finally:
+        user32.CloseClipboard()
+
+
+def element_metadata(control: auto.Control) -> dict[str, str]:
+    """Metadata of a UI element. Deliberately never touches Name, Value or text patterns."""
+    state = ""
+    try:
+        toggle = control.GetPattern(auto.PatternId.TogglePattern)
+        if toggle:
+            state = {0: "off", 1: "on", 2: "indeterminate"}.get(toggle.ToggleState, "")
+    except Exception:
+        pass
+    return {
+        "control_type": control.ControlTypeName or "",
+        "automation_id": control.AutomationId or "",
+        "class_name": control.ClassName or "",
+        "framework_id": control.FrameworkId or "",
+        "state": state,
+    }
+
+
+def is_password(control: auto.Control | None) -> bool:
+    """DeskMate read a property that does not exist; uiautomation exposes IsPassword."""
+    if control is None:
         return False
     try:
         return bool(control.IsPassword)
     except Exception:
-        return False
+        try:
+            return bool(control.Element.CurrentIsPassword)
+        except Exception:
+            return False
 
 
-def get_foreground_app_name() -> str:
-    """Returns the process name of the current foreground window."""
+def browser_domain(hwnd: int) -> str:
+    """Host name shown in the address bar, or "" while the user is typing in it."""
     try:
-        hwnd = win32gui.GetForegroundWindow()
-        if not hwnd:
+        window = auto.ControlFromHandle(hwnd)
+        bar = window.EditControl(searchDepth=12)
+        if not bar.Exists(0, 0) or bar.HasKeyboardFocus:
             return ""
-        _, pid = win32process.GetWindowThreadProcessId(hwnd)
-        if pid <= 0:
-            return ""
-        return psutil.Process(pid).name()
+        return sanitize.domain(bar.GetValuePattern().Value)
     except Exception:
         return ""
 
 
-class WindowsInputWatcher:
-    """Monitors typing activity, operational shortcuts, clipboard transfers,
+class InputWorker:
+    """Turns hook events and clipboard/focus polling into observations for the Recorder."""
 
-    and control metadata without capturing raw user text or content.
-    """
-
-    def __init__(self, recorder: Recorder, poll_interval: float = 0.5) -> None:
+    def __init__(self, recorder: Recorder, events: queue.Queue, poll_interval: float = 0.5):
         self.recorder = recorder
+        self.events = events
         self.poll_interval = poll_interval
-        self._running = False
+        self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-
-        self._last_clip_seq: int | None = None
-        self._typing_burst_count = 0
-        self._typing_start_time: datetime | None = None
-        self._typing_is_password = False
-
-    def check_clipboard(self) -> None:
-        """Inspects clipboard for changes without reading raw content."""
-        try:
-            seq = win32clipboard.GetClipboardSequenceNumber()
-            if self._last_clip_seq is None:
-                self._last_clip_seq = seq
-                return
-
-            if seq != self._last_clip_seq:
-                self._last_clip_seq = seq
-                app_name = get_foreground_app_name()
-
-                data_type = "text"
-                data_length = 0
-
-                win32clipboard.OpenClipboard()
-                try:
-                    # Check available formats without persisting content
-                    if win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_UNICODETEXT):
-                        raw_val = win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
-                        data_type = "text"
-                        data_length = len(raw_val) if raw_val else 0
-                    elif win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_TEXT):
-                        raw_val = win32clipboard.GetClipboardData(win32clipboard.CF_TEXT)
-                        data_type = "text"
-                        data_length = len(raw_val) if raw_val else 0
-                    elif win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_HDROP):
-                        files = win32clipboard.GetClipboardData(win32clipboard.CF_HDROP)
-                        data_type = "files"
-                        data_length = len(files) if files else 0
-                    elif win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_DIB):
-                        data_type = "image"
-                        data_length = 0
-                    else:
-                        data_type = "binary"
-                        data_length = 0
-                finally:
-                    win32clipboard.CloseClipboard()
-
-                # Dispatch to core without raw_content
-                self.recorder.observe(
-                    ClipboardObservation(
-                        timestamp=datetime.now(timezone.utc),
-                        action="copy",
-                        data_type=data_type,
-                        data_length=data_length,
-                        app_name=app_name,
-                    )
-                )
-        except Exception:
-            pass
-
-    def check_focused_control(self) -> None:
-        """Inspects currently focused UI control.
-
-        NEVER reads Name, Value, or TextPattern.
-        Only captures ControlType, AutomationId, ClassName, FrameworkId, and IsPassword.
-        """
-        try:
-            element = auto.GetFocusedElement()
-            if not element:
-                return
-
-            is_pwd = safe_is_password(element)
-            self._typing_is_password = is_pwd
-
-            app_name = get_foreground_app_name()
-            control_type = element.ControlTypeName or ""
-            automation_id = element.AutomationId or ""
-            class_name = element.ClassName or ""
-            framework_id = element.FrameworkId or ""
-
-            # If browser, query address bar
-            url = ""
-            if app_name.lower() in ("chrome.exe", "msedge.exe", "brave.exe", "firefox.exe"):
-                url = self._extract_browser_url(element)
-
-            self.recorder.observe(
-                ControlMetadataObservation(
-                    timestamp=datetime.now(timezone.utc),
-                    event_type="focus",
-                    control_type=control_type,
-                    automation_id=automation_id,
-                    class_name=class_name,
-                    framework_id=framework_id,
-                    url=url,
-                    app_name=app_name,
-                )
-            )
-        except Exception:
-            pass
-
-    def _extract_browser_url(self, focused: auto.Control) -> str:
-        """Locates the address bar and extracts URL string (core extracts domain)."""
-        try:
-            # Check if focused element itself is the address edit control
-            if focused.ControlTypeName == "EditControl":
-                val = focused.GetValuePattern().Value if hasattr(focused, "GetValuePattern") else ""
-                if val and ("http://" in val or "https://" in val):
-                    return val
-
-            # Or search top window for address bar
-            top = focused.GetTopLevelControl()
-            if top:
-                edit = top.EditControl(searchDepth=6)
-                if edit.Exists(0, 0):
-                    val = edit.GetValuePattern().Value if hasattr(edit, "GetValuePattern") else ""
-                    if val and ("http://" in val or "https://" in val):
-                        return val
-        except Exception:
-            pass
-        return ""
-
-    def record_key_press(self, is_special_op: str | None = None) -> None:
-        """Records a keystroke count or special operation without storing key characters."""
-        now = datetime.now(timezone.utc)
-        app_name = get_foreground_app_name()
-
-        if is_special_op:
-            # Operation type (e.g. ctrl+c, ctrl+v, enter, tab, escape)
-            self.recorder.observe(
-                OperationTypeObservation(
-                    timestamp=now,
-                    operation_type=is_special_op,
-                    app_name=app_name,
-                )
-            )
-            # Flush any ongoing typing burst
-            self.flush_typing_burst()
-            return
-
-        # Regular typing burst tracking
-        if self._typing_burst_count == 0:
-            self._typing_start_time = now
-
-        self._typing_burst_count += 1
-
-    def flush_typing_burst(self) -> None:
-        """Emits aggregated typing activity count and duration."""
-        if self._typing_burst_count > 0 and self._typing_start_time is not None:
-            now = datetime.now(timezone.utc)
-            duration = max(0.0, (now - self._typing_start_time).total_seconds())
-            app_name = get_foreground_app_name()
-
-            # For password field: keystrokes=0 (duration only preserved)
-            keystrokes = 0 if self._typing_is_password else self._typing_burst_count
-
-            self.recorder.observe(
-                TypingObservation(
-                    timestamp=self._typing_start_time,
-                    keystrokes=keystrokes,
-                    duration_seconds=duration,
-                    is_password=self._typing_is_password,
-                    app_name=app_name,
-                )
-            )
-
-            self._typing_burst_count = 0
-            self._typing_start_time = None
-
-    def _loop(self) -> None:
-        while self._running:
-            try:
-                self.check_clipboard()
-                self.check_focused_control()
-            except Exception:
-                pass
-            time.sleep(self.poll_interval)
+        self._burst: dict | None = None
+        self._last_cut: datetime | None = None
+        self._clip_seq: int | None = None
+        self._focus_key: tuple | None = None
+        self._in_password = False
+        self._last_title: str | None = None
 
     def start(self) -> None:
-        if self._running:
-            return
-        self._running = True
-        self._thread = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._run, name="input", daemon=True)
+            self._thread.start()
 
     def stop(self) -> None:
-        self.flush_typing_burst()
-        self._running = False
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=2.0)
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=3)
             self._thread = None
+
+    def _run(self) -> None:
+        with auto.UIAutomationInitializerInThread():
+            next_poll = datetime.now(timezone.utc)
+            while not self._stop.is_set():
+                try:
+                    self._drain(timeout=0.2)
+                    now = datetime.now(timezone.utc)
+                    if now >= next_poll:
+                        next_poll = now + timedelta(seconds=self.poll_interval)
+                        self._poll_focus_and_browser()
+                        self._poll_clipboard()
+                    self._flush_typing_if_quiet(now)
+                except Exception as exc:
+                    log.error("input worker cycle failed: %s", type(exc).__name__)
+            self._flush_typing()
+
+    def _drain(self, timeout: float) -> None:
+        try:
+            event = self.events.get(timeout=timeout)
+        except queue.Empty:
+            return
+        while True:
+            self._handle(event)
+            try:
+                event = self.events.get_nowait()
+            except queue.Empty:
+                return
+
+    def _handle(self, event: tuple) -> None:
+        kind, when = event[0], event[1]
+        app, _ = foreground_app()
+        if kind == "key":
+            burst = self._burst
+            if burst is None or burst["app"] != app:
+                self._flush_typing()
+                self._burst = burst = {"app": app, "start": when, "count": 0}
+            burst["count"] += 1
+            burst["last"] = when
+            burst["password"] = burst.get("password", False) or self._in_password
+        elif kind == "click":
+            self._on_click(when, event[2], event[3], app)
+        else:
+            if kind == "ctrl+x":
+                self._last_cut = when
+            self.recorder.observe(OperationTypeObservation(when, kind, app_name=app))
+
+    def _flush_typing_if_quiet(self, now: datetime) -> None:
+        if self._burst and now - self._burst["last"] >= TYPING_PAUSE:
+            self._flush_typing()
+
+    def _flush_typing(self) -> None:
+        burst, self._burst = self._burst, None
+        if burst:
+            self.recorder.observe(
+                TypingObservation(
+                    timestamp=burst["start"],
+                    keystrokes=burst["count"],
+                    duration_seconds=(burst["last"] - burst["start"]).total_seconds(),
+                    is_password=burst["password"],
+                    app_name=burst["app"],
+                )
+            )
+
+    def _on_click(self, when: datetime, x: int, y: int, app: str) -> None:
+        control = auto.ControlFromPoint(x, y)
+        if control is None:
+            return
+        self.recorder.observe(
+            ControlMetadataObservation(
+                when, event_type="click", app_name=app, **element_metadata(control)
+            )
+        )
+
+    def _poll_focus_and_browser(self) -> None:
+        now = datetime.now(timezone.utc)
+        app, title = foreground_app()
+        focused = auto.GetFocusedElement()
+        if focused is not None:
+            self._in_password = is_password(focused)
+            meta = element_metadata(focused)
+            key = (app, tuple(meta.values()))
+            if key != self._focus_key:
+                self._focus_key = key
+                self.recorder.observe(
+                    ControlMetadataObservation(now, event_type="focus", app_name=app, **meta)
+                )
+        if app.lower() in BROWSERS and title != self._last_title:
+            self._last_title = title
+            domain = browser_domain(win32gui.GetForegroundWindow())
+            if domain:
+                self.recorder.observe(
+                    ControlMetadataObservation(
+                        now, event_type="navigate", browser_domain=domain, app_name=app
+                    )
+                )
+        elif app.lower() not in BROWSERS:
+            self._last_title = None
+
+    def _poll_clipboard(self) -> None:
+        seq = int(user32.GetClipboardSequenceNumber())
+        if self._clip_seq is None:
+            self._clip_seq = seq
+            return
+        if seq == self._clip_seq:
+            return
+        self._clip_seq = seq
+        now = datetime.now(timezone.utc)
+        app, _ = foreground_app()
+        data_type, size = clipboard_shape()
+        cut = self._last_cut is not None and now - self._last_cut < timedelta(seconds=2)
+        self.recorder.observe(
+            ClipboardObservation(now, "cut" if cut else "copy", data_type, size, app_name=app)
+        )

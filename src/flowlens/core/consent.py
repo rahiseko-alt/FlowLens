@@ -8,7 +8,6 @@ from typing import Any
 ALL_PAST_SOURCES = [
     "system_log",
     "security_log",
-    "srum",
     "user_assist",
     "recent_files",
     "office_recent",

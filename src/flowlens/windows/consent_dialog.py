@@ -1,175 +1,162 @@
+"""First-run consent screen and the Past Import progress screen (#18)."""
+
 from __future__ import annotations
 
+import queue
+import threading
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import messagebox, ttk
-from typing import Any, Callable
+from typing import Any
 
+from flowlens.core import Recorder
 from flowlens.core.consent import ALL_PAST_SOURCES
 
-SOURCE_LABELS = {
-    "system_log": "システムログ（起動・終了・スリープ時刻）",
-    "security_log": "セキュリティログ（ログオン・ロック時刻 ※管理者権限が必要）",
-    "srum": "システム資源利用記録（SRUM ※管理者権限が必要）",
-    "user_assist": "アプリ起動履歴（UserAssist）",
-    "recent_files": "最近使ったファイル（開いたファイル拡張子）",
-    "office_recent": "Office の最近使ったファイル",
-    "browser_history": "ブラウザ閲覧履歴（訪問ドメインのみ、本文・URLクエリは除外）",
+SOURCES = {
+    "system_log": (
+        "Windows のシステムの記録",
+        "PC の起動・終了・スリープ・復帰の時刻",
+    ),
+    "security_log": (
+        "Windows のセキュリティの記録",
+        "画面ロック・解除・サインアウトの時刻（管理者権限が無いと読めません）",
+    ),
+    "user_assist": (
+        "アプリの利用回数",
+        "アプリ（.exe）ごとの起動回数・前面にあった合計時間・最後に使った時刻",
+    ),
+    "recent_files": (
+        "最近使ったファイル",
+        "開いたファイルの種類（.xlsx など）と時刻。ファイル名は読めない記号にします",
+    ),
+    "office_recent": (
+        "Office の最近使ったファイル",
+        "Word・Excel などで開いたファイルの種類と時刻。ファイル名は読めない記号にします",
+    ),
+    "browser_history": (
+        "Chrome / Edge の閲覧履歴",
+        "訪れたサイトの名前（例: example.com）と時刻だけ。ページの中身や URL の続きは読みません",
+    ),
 }
+
+PRINCIPLES = (
+    "FlowLens は、普段の PC 操作から「繰り返している作業」を見つけるための記録アプリです。\n\n"
+    "・記録はこの PC の中にだけ保存します。外部への送信や AI の利用は一切しません。\n"
+    "・入力した文字、コピーした中身、パスワード、画面は記録しません。\n"
+    "・ウィンドウの題名とファイル名は読めない記号に変えて保存します。\n"
+    "・画面右下のアイコンで記録中かどうかが分かり、いつでも一時停止できます。\n"
+    "・記録しないアプリの指定、記録の削除、書き出しもアイコンから行えます。\n\n"
+    "同意すると、これからの記録を始め、あわせて Windows に残っている"
+    "過去30日分の足跡を読み込みます。読み込みたくない元はチェックを外してください。"
+)
 
 
 class ConsentDialog:
-    """Tkinter-based first-run consent dialog presenting privacy commitments and choices."""
-
-    def __init__(
-        self,
-        on_consent: Callable[[list[str]], None] | None = None,
-        on_decline: Callable[[], None] | None = None,
-    ):
-        self.on_consent = on_consent
-        self.on_decline = on_decline
+    def __init__(self) -> None:
         self.consented = False
         self.selected_sources: list[str] = list(ALL_PAST_SOURCES)
 
     def show(self) -> bool:
-        """Displays the consent modal dialog. Returns True if user consented, False otherwise."""
         root = tk.Tk()
-        root.title("FlowLens — 初回利用同意と過去データの読み込み")
-        root.geometry("640x680")
+        root.title("FlowLens — ご利用の前に")
         root.resizable(False, False)
-
-        # Main frame
-        frame = ttk.Frame(root, padding="16 16 16 16")
+        frame = ttk.Frame(root, padding=16)
         frame.pack(fill=tk.BOTH, expand=True)
-
-        # Title
-        title_label = ttk.Label(
-            frame,
-            text="FlowLens 業務記録の利用開始",
-            font=("Segoe UI", 14, "bold"),
+        ttk.Label(frame, text="記録を始める前にご確認ください", font=("", 13, "bold")).pack(
+            anchor=tk.W, pady=(0, 8)
         )
-        title_label.pack(anchor=tk.W, pady=(0, 10))
-
-        # Privacy Commitments Box
-        privacy_text = (
-            "【プライバシー保護の原則】\n"
-            "・データはすべてお使いの PC 内（ローカル）にのみ保存されます。\n"
-            "・外部サーバーやクラウドへの送信、AI/LLM の呼び出しは一切行いません。\n"
-            "・入力した文字、文章、クリップボードの内容、パスワードは記録されません。\n"
-            "・ウィンドウ名やファイル名は読めない記号に変換し、URL はドメイン名のみ保存します。\n"
-            "・右下のタスクトレイアイコンから、いつでも一時停止や記録データの削除が可能です。\n\n"
-            "【過去30日分の足跡の読み込み】\n"
-            "インストール後すぐに分析提案を行うため、Windows やアプリが既に残している"
-            "過去30日分の足跡を読み込みます。"
-            "読み込みたくない元は以下のチェックを外して除外できます。"
-        )
-        msg_box = tk.Text(
-            frame,
-            height=9,
-            wrap=tk.WORD,
-            bg="#f4f4f4",
-            relief=tk.FLAT,
-            font=("Segoe UI", 9),
-            padx=10,
-            pady=8,
-        )
-        msg_box.insert(tk.END, privacy_text)
-        msg_box.config(state=tk.DISABLED)
-        msg_box.pack(fill=tk.X, pady=(0, 12))
-
-        # Checkboxes header
+        ttk.Label(frame, text=PRINCIPLES, wraplength=600, justify=tk.LEFT).pack(anchor=tk.W)
         ttk.Label(
-            frame,
-            text="読み込む元の選択（初期状態ですべて選択）:",
-            font=("Segoe UI", 10, "bold"),
-        ).pack(anchor=tk.W, pady=(0, 6))
+            frame, text="過去30日分を読み込む元（初めはすべて選択）", font=("", 10, "bold")
+        ).pack(anchor=tk.W, pady=(12, 4))
+        choices: dict[str, tk.BooleanVar] = {}
+        for source in ALL_PAST_SOURCES:
+            title, detail = SOURCES[source]
+            choices[source] = tk.BooleanVar(value=True)
+            ttk.Checkbutton(frame, text=f"{title} — {detail}", variable=choices[source]).pack(
+                anchor=tk.W, pady=1
+            )
 
-        # Sources checkboxes frame
-        chk_frame = ttk.Frame(frame)
-        chk_frame.pack(fill=tk.X, pady=(0, 16))
-
-        var_dict: dict[str, tk.BooleanVar] = {}
-        for src in ALL_PAST_SOURCES:
-            var = tk.BooleanVar(value=True)
-            var_dict[src] = var
-            lbl = SOURCE_LABELS.get(src, src)
-            chk = ttk.Checkbutton(chk_frame, text=lbl, variable=var)
-            chk.pack(anchor=tk.W, pady=2)
-
-        # Progress / Status section (initially empty)
-        status_label = ttk.Label(frame, text="", font=("Segoe UI", 9))
-        status_label.pack(anchor=tk.W, pady=(0, 8))
-
-        # Buttons frame
-        btn_frame = ttk.Frame(frame)
-        btn_frame.pack(fill=tk.X, side=tk.BOTTOM, pady=(10, 0))
-
-        def handle_agree():
-            chosen = [src for src, var in var_dict.items() if var.get()]
-            self.selected_sources = chosen
+        def agree() -> None:
+            self.selected_sources = [s for s, v in choices.items() if v.get()]
             self.consented = True
-            if self.on_consent:
-                self.on_consent(chosen)
             root.destroy()
 
-        def handle_decline():
-            msg = (
-                "同意しない場合、FlowLens は何も記録・読み込みを行わずに終了します。"
-                "よろしいですか？"
-            )
-            if messagebox.askyesno("確認", msg):
+        def decline() -> None:
+            if messagebox.askyesno(
+                "確認", "同意しない場合、何も記録・読み込みをせずに終了します。よろしいですか？"
+            ):
                 self.consented = False
-                if self.on_decline:
-                    self.on_decline()
                 root.destroy()
 
-        btn_agree = ttk.Button(btn_frame, text="同意して記録を開始", command=handle_agree)
-        btn_agree.pack(side=tk.RIGHT, padx=(8, 0))
-
-        btn_decline = ttk.Button(btn_frame, text="同意しない（終了）", command=handle_decline)
-        btn_decline.pack(side=tk.RIGHT)
-
-        root.protocol("WM_DELETE_WINDOW", handle_decline)
+        buttons = ttk.Frame(frame)
+        buttons.pack(fill=tk.X, pady=(16, 0))
+        ttk.Button(buttons, text="同意して記録を始める", command=agree).pack(side=tk.RIGHT)
+        ttk.Button(buttons, text="同意しない（終了）", command=decline).pack(
+            side=tk.RIGHT, padx=(0, 8)
+        )
+        root.protocol("WM_DELETE_WINDOW", decline)
         root.mainloop()
         return self.consented
 
 
-def show_import_results_dialog(report: dict[str, dict[str, Any]]) -> None:
-    """Displays the result of Past Import (record counts and reasons for unread sources)."""
+def run_past_import_with_progress(
+    recorder: Recorder, providers: dict[str, Callable[[], list[Any]]]
+) -> dict[str, dict[str, Any]]:
+    """Reads each source in the background and shows its progress and result."""
+    report: dict[str, dict[str, Any]] = {}
+    updates: queue.Queue = queue.Queue()
+
+    def work() -> None:
+        for name, provider in providers.items():
+            updates.put((name, {"status": "running", "count": 0, "error": None}))
+            result = recorder.import_past_providers({name: provider})[name]
+            report[name] = result
+            updates.put((name, result))
+        updates.put(None)
+
     root = tk.Tk()
-    root.title("FlowLens — 過去データ読み込み結果")
-    root.geometry("520x380")
+    root.title("FlowLens — 過去30日分の読み込み")
     root.resizable(False, False)
-
-    frame = ttk.Frame(root, padding="16")
+    frame = ttk.Frame(root, padding=16)
     frame.pack(fill=tk.BOTH, expand=True)
+    heading = ttk.Label(frame, text="過去30日分の足跡を読み込んでいます…", font=("", 12, "bold"))
+    heading.pack(anchor=tk.W, pady=(0, 8))
+    table = ttk.Treeview(frame, columns=("state", "count", "reason"), height=len(providers))
+    for col, text, width in (
+        ("#0", "読み込む元", 220),
+        ("state", "状態", 90),
+        ("count", "件数", 70),
+        ("reason", "読めなかった理由", 220),
+    ):
+        table.heading(col, text=text)
+        table.column(col, width=width)
+    for name in providers:
+        table.insert(
+            "", tk.END, iid=name, text=SOURCES.get(name, (name,))[0], values=("待機中", "", "")
+        )
+    table.pack(fill=tk.BOTH)
+    close = ttk.Button(frame, text="閉じる", command=root.destroy, state=tk.DISABLED)
+    close.pack(anchor=tk.E, pady=(12, 0))
+    labels = {"running": "読み込み中", "success": "完了", "skipped": "対象外", "failed": "読めず"}
 
-    ttk.Label(
-        frame,
-        text="過去30日分の読み込みが完了しました",
-        font=("Segoe UI", 12, "bold"),
-    ).pack(anchor=tk.W, pady=(0, 10))
+    def poll() -> None:
+        while True:
+            try:
+                item = updates.get_nowait()
+            except queue.Empty:
+                root.after(200, poll)
+                return
+            if item is None:
+                heading.config(text="読み込みが終わりました")
+                close.config(state=tk.NORMAL)
+                return
+            name, result = item
+            reason = "" if result["status"] != "failed" else (result["error"] or "")
+            table.item(name, values=(labels[result["status"]], result["count"] or "", reason))
 
-    tree = ttk.Treeview(frame, columns=("source", "status", "count", "reason"), show="headings")
-    tree.heading("source", text="読み込み元")
-    tree.heading("status", text="結果")
-    tree.heading("count", text="件数")
-    tree.heading("reason", text="理由")
-
-    tree.column("source", width=120)
-    tree.column("status", width=60)
-    tree.column("count", width=50)
-    tree.column("reason", width=220)
-
-    for src, res in report.items():
-        st = res["status"]
-        status = "成功" if st == "success" else ("除外" if st == "skipped" else "失敗")
-        cnt = str(res["count"])
-        err = res.get("error") or ""
-        tree.insert("", tk.END, values=(src, status, cnt, err))
-
-    tree.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-
-    btn = ttk.Button(frame, text="閉じる", command=root.destroy)
-    btn.pack(side=tk.RIGHT)
-
+    threading.Thread(target=work, name="past-import", daemon=True).start()
+    root.protocol("WM_DELETE_WINDOW", lambda: close.instate(["!disabled"]) and root.destroy())
+    root.after(200, poll)
     root.mainloop()
+    return report
