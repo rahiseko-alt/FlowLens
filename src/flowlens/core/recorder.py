@@ -9,6 +9,7 @@ import pyzipper
 from flowlens.core.crypto import KeyManager
 from flowlens.core.models import (
     ClipboardObservation,
+    ControlMetadataObservation,
     IdleObservation,
     LockObservation,
     Observation,
@@ -19,6 +20,7 @@ from flowlens.core.models import (
     TypingObservation,
     WindowObservation,
 )
+from flowlens.core.redaction import extract_browser_domain
 from flowlens.core.storage import Storage
 
 MANIFEST_VERSION = "0.1.0"
@@ -113,8 +115,35 @@ class Recorder:
             self._handle_operation_observation(observation)
         elif isinstance(observation, ClipboardObservation):
             self._handle_clipboard_observation(observation)
+        elif isinstance(observation, ControlMetadataObservation):
+            self._handle_control_metadata_observation(observation)
         elif isinstance(observation, WindowObservation):
             self._handle_window_observation(observation)
+
+    def _handle_control_metadata_observation(
+        self, obs: ControlMetadataObservation
+    ) -> None:
+        if self.is_away:
+            return
+
+        app_name = obs.app_name or self._active_app or "Unknown"
+        title_hash = self._active_title_hash
+        domain = extract_browser_domain(obs.url)
+
+        self.storage.insert_control_event(
+            app_name=app_name,
+            window_title_hash=title_hash,
+            event_type=obs.event_type,
+            control_type=obs.control_type,
+            automation_id=obs.automation_id,
+            class_name=obs.class_name,
+            framework_id=obs.framework_id,
+            state=obs.state,
+            browser_domain=domain,
+            timestamp=obs.timestamp,
+            is_past=0,
+            source="live",
+        )
 
     def _handle_typing_observation(self, obs: TypingObservation) -> None:
         if self.is_away:

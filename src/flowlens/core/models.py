@@ -89,6 +89,23 @@ class ClipboardObservation(Observation):
 
 
 @dataclass(frozen=True)
+class ControlMetadataObservation(Observation):
+    """Observation of UI element interaction or browser navigation."""
+
+    event_type: str = "click"
+    control_type: str = ""
+    automation_id: str = ""
+    class_name: str = ""
+    framework_id: str = ""
+    state: str = ""
+    url: str = ""
+    name: str = ""  # Input from hook, discarded by core
+    value: str = ""  # Input from hook, discarded by core
+    app_name: str | None = None
+    window_title: str | None = None
+
+
+@dataclass(frozen=True)
 class AppSession:
     """An app session representing uninterrupted active foreground usage."""
 

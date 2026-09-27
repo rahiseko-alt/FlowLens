@@ -57,11 +57,28 @@ CREATE TABLE IF NOT EXISTS clipboard_transfers (
     source TEXT NOT NULL DEFAULT 'live'
 );
 
+CREATE TABLE IF NOT EXISTS control_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    app_name TEXT NOT NULL,
+    window_title_hash TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    control_type TEXT NOT NULL,
+    automation_id TEXT NOT NULL,
+    class_name TEXT NOT NULL,
+    framework_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    browser_domain TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    is_past INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'live'
+);
+
 CREATE INDEX IF NOT EXISTS idx_app_sessions_time ON app_sessions(start_time, end_time);
 CREATE INDEX IF NOT EXISTS idx_app_sessions_app ON app_sessions(app_name);
 CREATE INDEX IF NOT EXISTS idx_typing_time ON typing_activities(start_time, end_time);
 CREATE INDEX IF NOT EXISTS idx_operation_time ON operation_types(timestamp);
 CREATE INDEX IF NOT EXISTS idx_clipboard_time ON clipboard_transfers(copy_time);
+CREATE INDEX IF NOT EXISTS idx_control_time ON control_events(timestamp);
 """
 
 
@@ -234,6 +251,50 @@ class Storage:
         finally:
             conn.close()
 
+    def insert_control_event(
+        self,
+        app_name: str,
+        window_title_hash: str,
+        event_type: str,
+        control_type: str,
+        automation_id: str,
+        class_name: str,
+        framework_id: str,
+        state: str,
+        browser_domain: str,
+        timestamp: datetime,
+        is_past: int = 0,
+        source: str = "live",
+    ) -> None:
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO control_events (
+                    app_name, window_title_hash, event_type, control_type,
+                    automation_id, class_name, framework_id, state,
+                    browser_domain, timestamp, is_past, source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    app_name,
+                    window_title_hash,
+                    event_type,
+                    control_type,
+                    automation_id,
+                    class_name,
+                    framework_id,
+                    state,
+                    browser_domain,
+                    timestamp.isoformat(),
+                    is_past,
+                    source,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     def get_app_sessions(
         self, start: datetime | None = None, end: datetime | None = None
     ) -> list[dict[str, Any]]:
@@ -376,6 +437,36 @@ class Storage:
                             cb["paste_time"],
                             cb["is_past"],
                             cb["source"],
+                        ),
+                    )
+
+                # Export control events in time range
+                cur = src_conn.execute(
+                    "SELECT * FROM control_events WHERE timestamp >= ? AND timestamp <= ?",
+                    (start.isoformat(), end.isoformat()),
+                )
+                for ce in cur.fetchall():
+                    conn.execute(
+                        """
+                        INSERT INTO control_events (
+                            app_name, window_title_hash, event_type, control_type,
+                            automation_id, class_name, framework_id, state,
+                            browser_domain, timestamp, is_past, source
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            ce["app_name"],
+                            ce["window_title_hash"],
+                            ce["event_type"],
+                            ce["control_type"],
+                            ce["automation_id"],
+                            ce["class_name"],
+                            ce["framework_id"],
+                            ce["state"],
+                            ce["browser_domain"],
+                            ce["timestamp"],
+                            ce["is_past"],
+                            ce["source"],
                         ),
                     )
             finally:

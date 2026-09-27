@@ -3,6 +3,7 @@
 from flowlens.core.models import (
     AppSession,
     ClipboardObservation,
+    ControlMetadataObservation,
     IdleObservation,
     LockObservation,
     Observation,
@@ -26,6 +27,7 @@ __all__ = [
     "TypingObservation",
     "OperationTypeObservation",
     "ClipboardObservation",
+    "ControlMetadataObservation",
     "AppSession",
     "TimeRange",
 ]
