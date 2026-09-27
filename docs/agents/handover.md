@@ -8,6 +8,25 @@
 
 ---
 
+## 2026-09-27 仕様書を19個の作業単位に割って発行
+
+**決めたこと**
+
+- https://github.com/rahiseko-alt/FlowLens/issues/3 の子として、https://github.com/rahiseko-alt/FlowLens/issues/4 〜 https://github.com/rahiseko-alt/FlowLens/issues/22 の19件を発行した（すべて `ready-for-agent`。前提となる作業単位は各本文の「Blocked by」）
+- すぐ始められるのは2件: https://github.com/rahiseko-alt/FlowLens/issues/4（実機調査。利用者の Windows PC が要る）と https://github.com/rahiseko-alt/FlowLens/issues/5（最小の一本道）
+
+**次にやること**
+
+- https://github.com/rahiseko-alt/FlowLens/pull/1 → https://github.com/rahiseko-alt/FlowLens/pull/2 の順に取り込む
+- `/implement` で https://github.com/rahiseko-alt/FlowLens/issues/5 から始める
+- 並行して、利用者の Windows PC で https://github.com/rahiseko-alt/FlowLens/issues/4 を行う
+- `README.md` の冒頭を FlowLens の説明に書き換える
+
+**未解決の問題**
+
+- 過去分の読み込み元で本当に何が読めるか、管理者権限が要る元を社員本人のインストールで読めるかは、Windows 実機で未確認
+- 題名をハッシュにした粒度で業務を見分けられるかは、実データで確かめるまで分からない
+
 ## 2026-09-27 Collector MVP の仕様書を発行
 
 **決めたこと**
@@ -97,33 +116,4 @@
 - UI 部品の Name から、固定のラベルとユーザーが書いた内容を見分けられるかは未調査
 - ウィンドウタイトルやファイルパスをどの粒度で残すかは未定（実データでの検証が必要）
 - 実際の Windows 機では何も確かめていない
-
-## 2026-09-21 サブエージェントの洗い直しで3件追加修正
-
-**決めたこと**
-
-- ここまでの2件の修正は自分だけで探していたので、サブエージェントに独立して全体を洗い直させた。
-  見つかった3件を修正した
-- (1) `/setup-matt-pocock-skills`を再実行すると、ベンダーのひな形で`docs/agents/domain.md`等を
-  無条件に上書きし、今回までの穴埋めごと消える設計だった。`flow-map.md`のルールを
-  「domain.mdが消えても1行で足りる」自己完結な内容に書き直し、加えて再実行時は
-  現在の中身を読んで独自追記を残すよう`flow-map.md`にルール7を追加した
-- (2) `handover-trim.sh`は上限を超えた古いメモを完全に削除する設計で、行き場が無かった。
-  `docs/agents/handover-archive.md`へ退避してから削るよう書き直した（動作確認済み。
-  会話開始時には読み込まれない保管庫）
-- (3) `next-step`のドメイン文書チェックが、多コンテキスト構成の`CONTEXT-MAP.md`・
-  `src/<context>/docs/adr/`を見ていなかったので追記した
-
-**次にやること**
-
-- `/grill-with-docs` で「何を作るか」を決める（前回から持ち越し。まだ未着手）
-- 決まったら `/to-spec` → `/to-tickets` → `/implement` と進む
-- `README.md` の冒頭をこのプロジェクトの説明に書き換える
-- `docs/adr/`ができたら、`/code-review`実行時に実際にStandards軸へ渡るか、
-  `/setup-matt-pocock-skills`を再実行しても穴埋めが残るか、両方まだ未検証
-
-**未解決の問題**
-
-- 今回もこの3件以外に穴が無いという保証は無い。サブエージェントの調査も
-  「見た範囲では」の話であり、悉皆性の証明ではない
 
