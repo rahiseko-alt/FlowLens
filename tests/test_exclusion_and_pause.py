@@ -146,3 +146,13 @@ def test_late_observations_stamped_inside_a_lock_are_dropped(recorder, export):
     recorder.observe(TypingObservation(at(5), keystrokes=30, app_name="excel.exe"))
     exp = export()
     assert exp.rows("SELECT * FROM typing_activities") == []
+
+
+def test_settings_from_an_older_version_get_the_new_default_exclusions(tmp_path, clock):
+    import json
+
+    data = tmp_path / "old"
+    data.mkdir()
+    (data / "config.json").write_text(json.dumps({"excluded_apps": ["slack.exe"]}))
+    apps = Recorder(data, clock=clock).get_excluded_apps()
+    assert "slack.exe" in apps and "keepass.exe" in apps

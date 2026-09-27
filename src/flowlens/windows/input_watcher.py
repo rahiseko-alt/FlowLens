@@ -382,6 +382,9 @@ class InputWorker:
             event = self.events.get(timeout=timeout)
         except queue.Empty:
             return
+        # Re-check the focus now, so keys typed right after entering a password box are
+        # not judged by a focus reading that is up to one poll interval old.
+        self._step("password", self._refresh_password)
         while True:
             self._handle(event)
             try:
@@ -435,6 +438,9 @@ class InputWorker:
                 when, event_type="click", app_name=app, **element_metadata(control)
             )
         )
+
+    def _refresh_password(self) -> None:
+        self._in_password = is_password(auto.GetFocusedControl())
 
     def _poll_focus_and_browser(self) -> None:
         now = datetime.now(timezone.utc)

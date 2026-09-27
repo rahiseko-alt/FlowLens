@@ -29,7 +29,6 @@ def test_readme_tables_and_columns_exist(recorder, export):
 def test_guide_tables_and_columns_exist(recorder, export):
     use(recorder, "excel.exe", 0, 2)
     tables = schema(export())
-    columns = set().union(*tables.values())
     guide = GUIDE.read_text(encoding="utf-8")
     for row in re.findall(r"^\| `(\w+)` \|(.*)$", guide, flags=re.M):
         name, rest = row
@@ -38,4 +37,4 @@ def test_guide_tables_and_columns_exist(recorder, export):
         assert name in tables, name
         rest = re.sub(r"（[^）]*）|\([^)]*\)", "", rest)  # value lists in parentheses
         for column in re.findall(r"`(\w+)`", rest):
-            assert column in columns, f"{name}: {column}"
+            assert column in tables[name], f"{name}: {column}"

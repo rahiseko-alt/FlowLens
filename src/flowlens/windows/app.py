@@ -17,6 +17,7 @@ from pathlib import Path
 
 from flowlens.core import Recorder
 from flowlens.core.app_state import AlreadyRunningError, SingleInstanceLock
+from flowlens.core.config import ConfigManager
 from flowlens.core.consent import ConsentManager
 from flowlens.core.logging_config import close_logging, setup_logging
 from flowlens.windows import autostart
@@ -36,13 +37,18 @@ def data_dir() -> Path:
 
 class CollectorApp:
     def __init__(self, storage_dir: Path | None = None):
+        # Only cheap, file-free setup here: a second copy (e.g. the watchdog) must not
+        # open the database, the log or touch temp files before it holds the lock.
         self.storage_dir = storage_dir or data_dir()
         self.storage_dir.mkdir(parents=True, exist_ok=True)
-        self.log = setup_logging(self.storage_dir / "logs" / "collector.log")
         self.lock = SingleInstanceLock(self.storage_dir)
         self.consent = ConsentManager(self.storage_dir)
-        self.recorder = Recorder(self.storage_dir)
         self.events: queue.Queue = queue.Queue(maxsize=10_000)
+
+    def _build(self) -> None:
+        self.log = setup_logging(self.storage_dir / "logs" / "collector.log")
+        self.recorder = Recorder(self.storage_dir)
+        self.recorder.remove_leftover_temp_files()
         self.activity = ActivityWatcher(self.recorder)
         self.input = InputWorker(self.recorder, self.events)
         self.hooks = InputHooks(self.events)
@@ -55,14 +61,19 @@ class CollectorApp:
 
     def run(self, watchdog: bool = False) -> int:
         """`watchdog`: started by the scheduled task that restarts FlowLens after a crash.
-        It does nothing if FlowLens is running, or if the employee chose 終了 today."""
-        if watchdog and self.recorder.user_exited:
+
+        It does nothing if FlowLens is running, if the employee has not consented, or
+        if the employee chose 終了 (until the next login).
+        """
+        if watchdog and (
+            not self.consent.has_consent() or ConfigManager(self.storage_dir).get("user_exited")
+        ):
             return 0
         try:
             self.lock.acquire()
         except AlreadyRunningError:
-            self.log.info("already running")
             return 0
+        self._build()
         if not watchdog:
             self.recorder.user_exited = False  # a login or a manual start clears it
         try:
@@ -73,7 +84,10 @@ class CollectorApp:
             self.activity.start()
             self.input.start()
             self.tray.create()
-            self.hooks.start()
+            try:
+                self.hooks.start()
+            except OSError as exc:  # keep recording windows and clipboard without them
+                self.log.error("input hooks unavailable: %s", type(exc).__name__)
             self.log.info("live capture started")
             self.tray.run()
             return 0

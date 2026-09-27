@@ -6,6 +6,7 @@ from typing import Any
 
 DEFAULT_RETENTION_DAYS = 30
 DEFAULT_IDLE_THRESHOLD_SECONDS = 300.0
+DEFAULTS_VERSION = 2  # raise when new defaults must reach existing settings
 
 
 # Password managers are excluded from the start: copying a password from one would
@@ -50,6 +51,12 @@ class ConfigManager:
                     config.update(data)
             except (json.JSONDecodeError, OSError):
                 pass
+        if config.get("defaults_version", 0) < DEFAULTS_VERSION:
+            # Settings saved by an older version get the newer default exclusions once.
+            config["excluded_apps"] = sorted(
+                set(config["excluded_apps"]) | set(DEFAULT_EXCLUDED_APPS)
+            )
+            config["defaults_version"] = DEFAULTS_VERSION
         return config
 
     def _save(self) -> None:

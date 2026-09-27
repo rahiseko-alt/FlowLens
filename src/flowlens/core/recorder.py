@@ -82,8 +82,14 @@ class Recorder:
         paused_since = self._config.get("paused_since")
         if paused_since:
             self._blackouts.append([datetime.fromisoformat(paused_since), None])
+
+    def remove_leftover_temp_files(self) -> None:
+        """Deletes plain copies left by an export or import that was cut short.
+
+        Call only from the one running collector (after taking the single-instance lock).
+        """
         for leftover in self.storage_dir.glob(f"{TMP_PREFIX}*"):
-            shutil.rmtree(leftover, ignore_errors=True)  # from an export cut short
+            shutil.rmtree(leftover, ignore_errors=True)
 
     # ------------------------------------------------------------------ settings
 
