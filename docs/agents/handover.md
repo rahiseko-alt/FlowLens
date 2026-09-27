@@ -8,6 +8,26 @@
 
 ---
 
+## 2026-09-27 実装は Gemini（Antigravity）に任せる。指示書を用意
+
+**決めたこと**
+
+- 実装は Antigravity 上の Gemini 3.8 Flash が行う。利用者はリポジトリの URL を渡すだけで、途中で指示しない。完成後に Claude Code がレビューして仕上げる
+- Gemini 用の指示書は `GEMINI.md`。`AGENTS.md` の冒頭と `README.md` からもそこへ案内している。Issue の写しは `docs/issues/`
+- Gemini は枝 `gemini/mvp` 1本で、決めた順に Issue を進め、Issue ごとの報告書を `docs/gemini-reports/` に残す。マージや Issue の close はしない
+
+**次にやること**
+
+- https://github.com/rahiseko-alt/FlowLens/pull/1 → https://github.com/rahiseko-alt/FlowLens/pull/2 の順に main へ取り込む（Antigravity は main を読むため、取り込むまで渡せない）
+- 利用者が Antigravity に URL を渡して実装させる
+- 終わったら Claude Code で `gemini/mvp` を `/code-review` し、`docs/gemini-reports/summary.md` の質問に答え、仕上げる
+
+**未解決の問題**
+
+- Antigravity が `AGENTS.md` と `GEMINI.md` のどちらを優先するかは確証が無い（`AGENTS.md` の冒頭で `GEMINI.md` へ案内して補っている）
+- Antigravity が動く PC が Windows かどうかで、実機確認をどこまで Gemini が行えるかが変わる
+- 過去分の読み込み元で何が読めるかは、Windows 実機で未確認
+
 ## 2026-09-27 仕様書を19個の作業単位に割って発行
 
 **決めたこと**
@@ -90,30 +110,5 @@
 
 - UI 部品の Name から、固定のラベルとユーザーが書いた内容を見分けられるかは未調査
 - 題名をハッシュにした粒度で業務を見分けられるかは、実データで確かめるまで分からない
-- 実際の Windows 機では何も確かめていない
-
-## 2026-09-27 FlowLens の設計原則と DeskMate 流用調査
-
-**決めたこと**
-
-- 作るものは FlowLens（PC 業務観測・業務改善診断システム）。用語は `CONTEXT.md` に定義した
-- クライアント PC では AI を一切動かさない（ADR 0001）。最小データ原則: 業務フローの発見に要らないデータは保存しない（ADR 0002）
-- DeskMate 流用調査の結果と5分類は `docs/research/deskmate-survey.md` にある。記録の本体（daemon）とデータベースは書き直し、監視の部品を選んで流用する方針
-- 目的・一言説明・利用の流れを `docs/product-overview.md` に確定した。インストールは社員本人、渡し方は製品で決めない（手元に1ファイル保存まで）、コンサルタントは基本本人だが他者もありうる
-- 価値、実装してはいけない機能、MVP のゴール（一言）と柱10本を `docs/product-overview.md` に確定した。暗号化（AES-256）は MVP に含める。コンサルタントの PC には 7-Zip が必要
-- 利用者の元の仕様書の写しを `docs/research/original-spec.md` に保存した（後の合意は product-overview と ADR が優先）
-- 下書きの提出物: https://github.com/rahiseko-alt/FlowLens/pull/1
-
-**次にやること**
-
-- MVP の柱10本から、作る項目を割り出す（利用者と合意済みの次の作業）
-- 利用者の元の仕様書にある `IMPLEMENTATION_PLAN.md` を、調査結果と ADR をもとに作る（利用者の指示を待ってから）
-- そのあと `/to-spec` → `/to-tickets` → `/implement` と進む
-- `README.md` の冒頭を FlowLens の説明に書き換える
-
-**未解決の問題**
-
-- UI 部品の Name から、固定のラベルとユーザーが書いた内容を見分けられるかは未調査
-- ウィンドウタイトルやファイルパスをどの粒度で残すかは未定（実データでの検証が必要）
 - 実際の Windows 機では何も確かめていない
 
