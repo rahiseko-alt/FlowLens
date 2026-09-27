@@ -2,7 +2,10 @@
 ; Installs per-user without administrative privileges into %LOCALAPPDATA%\Programs\FlowLens
 
 #define MyAppName "FlowLens"
-#define MyAppVersion "0.2.0"
+; The build passes the release version with /DMyAppVersion=...
+#ifndef MyAppVersion
+  #define MyAppVersion "0.0.0-dev"
+#endif
 #define MyAppPublisher "FlowLens Team"
 #define MyAppExeName "flowlens.exe"
 

@@ -64,7 +64,9 @@ jobs:
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
-          & $iscc installer\flowlens.iss
+          $version = "${{ inputs.version || github.ref_name }}" -replace '^v', ''
+          if ($version -notmatch '^\d+\.\d+\.\d+') { $version = "0.0.0-dev" }
+          & $iscc "/DMyAppVersion=$version" installer\flowlens.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
       - uses: actions/upload-artifact@v4
