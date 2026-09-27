@@ -18,7 +18,7 @@
 
 **次にやること**
 
-- https://github.com/rahiseko-alt/FlowLens/pull/1 → https://github.com/rahiseko-alt/FlowLens/pull/2 の順に main へ取り込む（Antigravity は main を読むため、取り込むまで渡せない）
+- （済）https://github.com/rahiseko-alt/FlowLens/pull/1 と https://github.com/rahiseko-alt/FlowLens/pull/2 は main へ取り込み済み
 - 利用者が Antigravity に URL を渡して実装させる
 - 終わったら Claude Code で `gemini/mvp` を `/code-review` し、`docs/gemini-reports/summary.md` の質問に答え、仕上げる
 
