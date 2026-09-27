@@ -9,11 +9,11 @@ from flowlens.core.app_state import AlreadyRunningError, SingleInstanceLock
 from flowlens.core.consent import ConsentManager
 from flowlens.core.logging_config import setup_logging
 from flowlens.core.recorder import Recorder
-from flowlens.windows.activity_watcher import WindowsActivityWatcher
 from flowlens.windows.consent_dialog import ConsentDialog, show_import_results_dialog
 from flowlens.windows.input_watcher import WindowsInputWatcher
 from flowlens.windows.past_import import run_windows_past_import
 from flowlens.windows.status_window import StatusWindow
+from flowlens.windows.watcher import WindowsActivityWatcher
 
 
 class CollectorApp:
