@@ -589,3 +589,23 @@ class Recorder:
                 zf.writestr("summary.json", summary_json)
 
         return dest_path
+
+    def get_status(self) -> dict[str, Any]:
+        """Returns the current operational status and recording statistics."""
+        self.flush()
+        stats = self.storage.get_stats()
+        db_size = 0
+        if self.db_path.exists():
+            db_size += self.db_path.stat().st_size
+        wal_path = Path(str(self.db_path) + "-wal")
+        if wal_path.exists():
+            db_size += wal_path.stat().st_size
+
+        return {
+            "is_recording": not self._is_paused,
+            "is_paused": self._is_paused,
+            "earliest_session": stats["earliest_session"],
+            "total_duration_seconds": stats["total_duration_seconds"],
+            "session_count": stats["session_count"],
+            "database_size_bytes": db_size,
+        }

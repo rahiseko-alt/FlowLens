@@ -856,3 +856,23 @@ class Storage:
                 vacuum_conn.close()
         except sqlite3.OperationalError:
             pass
+
+    def get_stats(self) -> dict[str, Any]:
+        """Returns statistical overview of stored app sessions for status reporting."""
+        conn = self._connect()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT MIN(start_time), SUM(duration_seconds), COUNT(*) FROM app_sessions"
+            )
+            row = cur.fetchone()
+            earliest = row[0] if row else None
+            total_duration = (row[1] or 0.0) if row else 0.0
+            session_count = (row[2] or 0) if row else 0
+            return {
+                "earliest_session": earliest,
+                "total_duration_seconds": float(total_duration),
+                "session_count": session_count,
+            }
+        finally:
+            conn.close()
