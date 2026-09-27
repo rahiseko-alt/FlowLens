@@ -13,7 +13,11 @@ from __future__ import annotations
 import os
 import queue
 import sys
+import threading
+import traceback
 from pathlib import Path
+
+import win32gui
 
 from flowlens.core import Recorder
 from flowlens.core.app_state import AlreadyRunningError, SingleInstanceLock
@@ -25,7 +29,7 @@ from flowlens.windows.consent_dialog import ConsentDialog, run_past_import_with_
 from flowlens.windows.input_watcher import InputHooks, InputWorker
 from flowlens.windows.past_import import windows_past_providers
 from flowlens.windows.settings_window import SettingsWindow
-from flowlens.windows.shell import TrayShell
+from flowlens.windows.shell import WINDOW_CLASS, WM_OPEN_SETTINGS, TrayShell
 from flowlens.windows.status_window import StatusWindow
 from flowlens.windows.watcher import ActivityWatcher
 
@@ -59,7 +63,7 @@ class CollectorApp:
             on_exit=self.exit_by_user,
         )
 
-    def run(self, watchdog: bool = False) -> int:
+    def run(self, watchdog: bool = False, smoke_seconds: float = 0) -> int:
         """`watchdog`: started by the scheduled task that restarts FlowLens after a crash.
 
         It does nothing if FlowLens is running, if the employee has not consented, or
@@ -72,15 +76,23 @@ class CollectorApp:
         try:
             self.lock.acquire()
         except AlreadyRunningError:
+            if not watchdog:
+                open_settings_in_running_instance()  # e.g. clicked in the Start menu again
             return 0
         self._build()
         if not watchdog:
             self.recorder.user_exited = False  # a login or a manual start clears it
         try:
             self.log.info("collector started")
-            if not self.consent.has_consent() and not self._first_run():
-                self.log.info("consent declined")
-                return 0
+            if smoke_seconds:
+                self.consent.grant_consent()  # automated check only: no screens
+            elif not self.consent.has_consent():
+                if not self._first_run():
+                    self.log.info("consent declined")
+                    return 0
+                first_run = True
+            else:
+                first_run = False
             self.activity.start()
             self.input.start()
             self.tray.create()
@@ -89,8 +101,18 @@ class CollectorApp:
             except OSError as exc:  # keep recording windows and clipboard without them
                 self.log.error("input hooks unavailable: %s", type(exc).__name__)
             self.log.info("live capture started")
+            if smoke_seconds:
+                threading.Timer(smoke_seconds, self.tray.close).start()
+            elif first_run:
+                self.tray.notify(
+                    "FlowLens は記録を始めました",
+                    "画面右下のこのアイコンから、一時停止・設定・診断データの書き出しができます。",
+                )
             self.tray.run()
             return 0
+        except Exception as exc:
+            log_crash(self.log, exc)
+            return 1
         finally:
             self.stop()
             self.tray.destroy()
@@ -162,8 +184,25 @@ def self_check() -> int:
     return 0
 
 
+def log_crash(log, exc: BaseException) -> None:
+    """Where it failed, without the message (a message could carry a title or a path)."""
+    frames = traceback.extract_tb(exc.__traceback__)
+    where = " <- ".join(f"{Path(f.filename).name}:{f.lineno}:{f.name}" for f in reversed(frames))
+    log.error("crashed: %s at %s", type(exc).__name__, where)
+
+
+def open_settings_in_running_instance() -> None:
+    hwnd = win32gui.FindWindow(WINDOW_CLASS, None)
+    if hwnd:
+        win32gui.PostMessage(hwnd, WM_OPEN_SETTINGS, 0, 0)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     if "--self-check" in args:
         return self_check()
+    if "--smoke" in args:
+        # Automated check on a build machine: the whole app for a few seconds, no screens.
+        data = Path(args[args.index("--smoke") + 1])
+        return CollectorApp(data).run(smoke_seconds=8)
     return CollectorApp().run(watchdog="--watchdog" in args)

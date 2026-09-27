@@ -26,6 +26,8 @@ from flowlens.core import (
 log = logging.getLogger("flowlens")
 
 WM_TRAY = win32con.WM_APP + 1
+WM_OPEN_SETTINGS = win32con.WM_APP + 2  # sent by a second start (e.g. from the Start menu)
+WINDOW_CLASS = "FlowLensCollector"
 WM_WTSSESSION_CHANGE = 0x02B1
 WTS_CONSOLE_CONNECT, WTS_CONSOLE_DISCONNECT = 0x1, 0x2
 WTS_REMOTE_CONNECT, WTS_REMOTE_DISCONNECT = 0x3, 0x4
@@ -56,7 +58,7 @@ class TrayShell:
     def create(self) -> None:
         wc = win32gui.WNDCLASS()
         wc.hInstance = win32api.GetModuleHandle(None)
-        wc.lpszClassName = "FlowLensCollector"
+        wc.lpszClassName = WINDOW_CLASS
         wc.lpfnWndProc = self._wndproc
         win32gui.RegisterClass(wc)
         self.hwnd = win32gui.CreateWindow(
@@ -84,6 +86,32 @@ class TrayShell:
         """Pumps messages until the tray menu's 終了 is chosen."""
         win32gui.PumpMessages()
 
+    def close(self) -> None:
+        """Ends the message loop from any thread (used by the automated check)."""
+        if self.hwnd:
+            win32gui.PostMessage(self.hwnd, win32con.WM_CLOSE, 0, 0)
+
+    def notify(self, title: str, text: str) -> None:
+        """A balloon next to the tray icon, so the employee sees where FlowLens lives."""
+        try:
+            win32gui.Shell_NotifyIcon(
+                win32gui.NIM_MODIFY,
+                (
+                    self.hwnd,
+                    0,
+                    win32gui.NIF_INFO,
+                    WM_TRAY,
+                    0,
+                    "",
+                    text,
+                    10,
+                    title,
+                    win32gui.NIIF_INFO,
+                ),
+            )
+        except win32gui.error as exc:
+            log.error("balloon failed: %s", type(exc).__name__)
+
     def refresh(self) -> None:
         """Updates the icon and tooltip after pause/resume."""
         self._add_icon(modify=True)
@@ -109,6 +137,8 @@ class TrayShell:
         try:
             if msg == WM_TRAY and lparam in (win32con.WM_RBUTTONUP, win32con.WM_LBUTTONUP):
                 self._show_menu()
+            elif msg == WM_OPEN_SETTINGS:
+                self._on_command(MENU_SETTINGS)
             elif msg == win32con.WM_COMMAND:
                 self._on_command(win32api.LOWORD(wparam))
             elif msg == WM_WTSSESSION_CHANGE:

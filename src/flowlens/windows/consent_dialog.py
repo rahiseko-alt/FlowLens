@@ -100,6 +100,18 @@ class ConsentDialog:
         return self.consented
 
 
+PERMISSION_CODES = ("1314", " 5", "PermissionError", "13")
+
+
+def friendly_reason(result: dict[str, Any]) -> str:
+    code = result.get("error") or ""
+    if any(part in code for part in PERMISSION_CODES):
+        return "管理者権限が必要なため読めません"
+    if result["status"] == "partial":
+        return f"一部だけ読めました（{code}）"
+    return f"読めませんでした（{code}）" if code else "読めませんでした"
+
+
 def run_past_import_with_progress(
     recorder: Recorder, providers: dict[str, Callable[[], list[Any]]]
 ) -> dict[str, dict[str, Any]]:
@@ -158,7 +170,7 @@ def run_past_import_with_progress(
                 close.config(state=tk.NORMAL)
                 return
             name, result = item
-            reason = result["error"] or "" if result["status"] in ("failed", "partial") else ""
+            reason = friendly_reason(result) if result["status"] in ("failed", "partial") else ""
             table.item(name, values=(labels[result["status"]], result["count"] or "", reason))
 
     threading.Thread(target=work, name="past-import", daemon=True).start()
