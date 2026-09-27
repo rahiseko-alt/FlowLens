@@ -1,5 +1,8 @@
 # GEMINI.md — FlowLens 実装担当（Gemini / Antigravity）への指示
 
+> **2026-09-27 時点で、この指示書による一括実装は終わっています。** 成果は Claude Code が点検して作り直しました（`docs/reviews/2026-09-27-gemini-mvp.md`）。
+> 新しい指示を受けるまで、この文書の「作業の進め方」に従って作業を始めないでください。
+
 あなたは FlowLens の実装担当です。**この文書は `AGENTS.md` より優先します。** `AGENTS.md` と `.claude/` 以下は Claude Code 用なので、あなたは従いません。
 Claude Code 用の手順とは、`s`・`f`・`next-step`・`/implement` などのスキル、引き継ぎメモ、SessionStart のことです。
 あなたの成果は、あとで Claude Code がレビューして仕上げます。速さより、**言われた範囲だけを、言われたとおりに**やることを優先してください。

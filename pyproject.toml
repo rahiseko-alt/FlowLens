@@ -1,0 +1,30 @@
+[project]
+name = "flowlens"
+version = "0.2.0"
+description = "FlowLens Collector"
+requires-python = ">=3.12"
+dependencies = [
+    "pyzipper>=0.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.5.0",
+]
+windows = [
+    "pywin32>=306",
+    "uiautomation>=2.0.29",
+    "psutil>=6.0.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
