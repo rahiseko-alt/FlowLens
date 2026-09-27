@@ -28,12 +28,13 @@ FlowLens Collector は、クライアント企業の社員が自らの PC に導
 1. **PyInstaller による単独バイナリ（onedir / onefile）化**:
    - `flowlens.spec` を作成し、Collector 本体および依存ライブラリ（`pyzipper`, `pywin32`）を Python 不要の実行ファイル群にパッケージングする。
    - 通信ライブラリや外部 SDK を含まない最小構成を保証する。
-2. **Inno Setup によるユーザー権限インストーラー（`flowlens_setup.iss`）**:
+2. **Inno Setup によるユーザー権限インストーラー（`installer/flowlens.iss`）**:
    - `PrivilegesRequired=lowest` を指定し、管理者権限なしで `%LOCALAPPDATA%\Programs\FlowLens` にインストール。
    - スタートメニューにショートカットを作成し、HKCU Run キーに自動起動を登録。
    - アンインストーラー実行時にメッセージボックスを表示し、記録データ（`%LOCALAPPDATA%\FlowLens`）を「消去する」か「残す」かを社員が選択できる設計とする。
-3. **Python 内部インストーラー/アンインストーラーの補助実装（`src/flowlens/windows/installer.py`）**:
-   - テスト自動化およびスクリプト実行環境向けに、Inno Setup と同等のショートカット作成・自動起動登録・データ消去選択を行えるPythonモジュールも提供する。
+3. **インストール直後に起動し、アンインストール前に止める**:
+   - インストールの最後に FlowLens を起動し、社員がその場で説明画面を見られるようにする。
+   - アンインストールの前に動いている FlowLens を止め、ファイルを確実に消せるようにする。
 4. **ライセンスの同梱**:
    - 配布物に FlowLens のライセンスおよび DeskMate の MIT ライセンス表示（`LICENSE`）を同梱する。
 
