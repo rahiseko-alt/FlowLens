@@ -54,6 +54,14 @@ _Avoid_: UIA Tree, 画面テキスト
 ユーザーや業務が生み出した中身。入力欄の値、本文、Clipboard の中身、顧客名などを指す。Collector は永続保存しない。
 _Avoid_: データ, テキスト
 
+**Live Capture**:
+同意した時点から先の操作を、Collector が記録し続けること。
+_Avoid_: 監視, 未来の記録
+
+**Past Import**:
+同意した時点で、Windows や各アプリが既に残している過去30日分の記録を読み込むこと。Live Capture より粒度が粗く、両者は区別して保存する。
+_Avoid_: 過去ログ収集, 遡及監視
+
 ## 書き出しと分析
 
 **Diagnostic Export**:
