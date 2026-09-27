@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 import pyzipper
 
+from flowlens.core.config import ConfigManager
 from flowlens.core.crypto import KeyManager
 from flowlens.core.models import (
     ClipboardObservation,
@@ -47,6 +48,7 @@ class Recorder:
         self.db_path = self.storage_dir / "collector.db"
         self.storage = Storage(self.db_path)
         self.key_manager = KeyManager(self.storage_dir)
+        self.config_manager = ConfigManager(self.storage_dir)
         self.clock = clock or (lambda: datetime.now(timezone.utc))
 
         self._active_app: str | None = None
@@ -57,9 +59,9 @@ class Recorder:
 
         self._is_paused = False
         self._pause_start: datetime | None = None
-        self._excluded_apps: set[str] = set()
+        self._excluded_apps: set[str] = set(self.config_manager.get_excluded_apps())
         self._enabled_past_sources: set[str] | None = None
-        self._retention_days: int = 30
+        self._retention_days: int | None = self.config_manager.get_retention_days()
         self._idle_threshold_seconds: float = 300.0
 
         self._is_idle = False
@@ -110,14 +112,42 @@ class Recorder:
                     )
             self._pause_start = None
 
+    def get_excluded_apps(self) -> list[str]:
+        """Returns the list of excluded app names."""
+        return sorted(self._excluded_apps)
+
+    def add_excluded_app(self, app_name: str) -> None:
+        """Adds an application to the excluded list and persists it."""
+        clean = app_name.lower().strip()
+        if not clean:
+            return
+        self._excluded_apps.add(clean)
+        self.config_manager.add_excluded_app(clean)
+
+    def remove_excluded_app(self, app_name: str) -> None:
+        """Removes an application from the excluded list and persists it."""
+        clean = app_name.lower().strip()
+        self._excluded_apps.discard(clean)
+        self.config_manager.remove_excluded_app(clean)
+
     def set_excluded_apps(self, apps: list[str]) -> None:
         self._excluded_apps = {app.lower().strip() for app in apps}
+        for a in self.config_manager.get_excluded_apps():
+            if a not in self._excluded_apps:
+                self.config_manager.remove_excluded_app(a)
+        for a in self._excluded_apps:
+            self.config_manager.add_excluded_app(a)
+
+    def get_retention_days(self) -> int | None:
+        """Returns the retention period in days (None means indefinite)."""
+        return self._retention_days
 
     def set_retention_days(self, days: int | None) -> None:
         if days is None or days <= 0:
             self._retention_days = None
         else:
             self._retention_days = int(days)
+        self.config_manager.set_retention_days(self._retention_days)
 
     def apply_retention_policy(self) -> None:
         """Deletes records exceeding retention period.
@@ -127,6 +157,30 @@ class Recorder:
         if self._retention_days is not None and self._retention_days > 0:
             cutoff = self.clock() - timedelta(days=self._retention_days)
             self.storage.delete_before(cutoff)
+
+    def compute_export_range(
+        self,
+        preset: str,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> TimeRange:
+        """Computes a TimeRange from a user-facing preset or custom dates."""
+        now = self.clock()
+        p = preset.lower().strip()
+        if p == "last_7_days":
+            return TimeRange(start=now - timedelta(days=7), end=now)
+        elif p == "last_14_days":
+            return TimeRange(start=now - timedelta(days=14), end=now)
+        elif p == "last_30_days":
+            return TimeRange(start=now - timedelta(days=30), end=now)
+        elif p == "all":
+            return TimeRange(start=datetime.min.replace(tzinfo=timezone.utc), end=now)
+        elif p == "custom":
+            if start is None or end is None:
+                raise ValueError("Custom range requires both start and end datetimes")
+            return TimeRange(start=start, end=end)
+        else:
+            raise ValueError(f"Unknown export range preset: {preset}")
 
     def set_enabled_past_sources(self, sources: list[str] | set[str] | None) -> None:
         """Configures which past import sources are allowed to be ingested.

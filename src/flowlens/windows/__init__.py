@@ -6,11 +6,13 @@ from flowlens.windows.autostart import is_autostart_enabled, set_autostart
 from flowlens.windows.consent_dialog import ConsentDialog
 from flowlens.windows.input_watcher import WindowsInputWatcher
 from flowlens.windows.past_import import get_windows_past_providers, run_windows_past_import
+from flowlens.windows.settings_window import SettingsWindow
 from flowlens.windows.status_window import StatusWindow
 
 __all__ = [
     "CollectorApp",
     "ConsentDialog",
+    "SettingsWindow",
     "StatusWindow",
     "WindowsActivityWatcher",
     "WindowsInputWatcher",
