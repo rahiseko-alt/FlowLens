@@ -7,7 +7,15 @@ from typing import Any, Callable
 import pyzipper
 
 from flowlens.core.crypto import KeyManager
-from flowlens.core.models import Observation, TimeRange, WindowObservation
+from flowlens.core.models import (
+    IdleObservation,
+    LockObservation,
+    Observation,
+    SessionDisconnectObservation,
+    SleepObservation,
+    TimeRange,
+    WindowObservation,
+)
 from flowlens.core.storage import Storage
 
 MANIFEST_VERSION = "0.1.0"
@@ -40,10 +48,33 @@ class Recorder:
         self._is_paused = False
         self._excluded_apps: set[str] = set()
         self._retention_days: int = 30
+        self._idle_threshold_seconds: float = 300.0
+
+        self._is_idle = False
+        self._is_locked = False
+        self._is_asleep = False
+        self._is_disconnected = False
 
     @property
     def is_paused(self) -> bool:
         return self._is_paused
+
+    @property
+    def idle_threshold_seconds(self) -> float:
+        return self._idle_threshold_seconds
+
+    def set_idle_threshold_seconds(self, seconds: float) -> None:
+        self._idle_threshold_seconds = seconds
+
+    @property
+    def is_away(self) -> bool:
+        """Returns True if the system is idle, locked, sleeping, or disconnected."""
+        return (
+            self._is_idle
+            or self._is_locked
+            or self._is_asleep
+            or self._is_disconnected
+        )
 
     def pause(self) -> None:
         self.flush()
@@ -63,10 +94,53 @@ class Recorder:
         if self._is_paused:
             return
 
-        if isinstance(observation, WindowObservation):
+        if isinstance(observation, IdleObservation):
+            self._handle_idle_observation(observation)
+        elif isinstance(observation, LockObservation):
+            self._handle_lock_observation(observation)
+        elif isinstance(observation, SleepObservation):
+            self._handle_sleep_observation(observation)
+        elif isinstance(observation, SessionDisconnectObservation):
+            self._handle_disconnect_observation(observation)
+        elif isinstance(observation, WindowObservation):
             self._handle_window_observation(observation)
 
+    def _handle_idle_observation(self, obs: IdleObservation) -> None:
+        if obs.is_idle:
+            if not self._is_idle:
+                self._is_idle = True
+                self._commit_active_session(end_time=obs.timestamp)
+        else:
+            self._is_idle = False
+
+    def _handle_lock_observation(self, obs: LockObservation) -> None:
+        if obs.is_locked:
+            if not self._is_locked:
+                self._is_locked = True
+                self._commit_active_session(end_time=obs.timestamp)
+        else:
+            self._is_locked = False
+
+    def _handle_sleep_observation(self, obs: SleepObservation) -> None:
+        if obs.is_asleep:
+            if not self._is_asleep:
+                self._is_asleep = True
+                self._commit_active_session(end_time=obs.timestamp)
+        else:
+            self._is_asleep = False
+
+    def _handle_disconnect_observation(self, obs: SessionDisconnectObservation) -> None:
+        if obs.is_disconnected:
+            if not self._is_disconnected:
+                self._is_disconnected = True
+                self._commit_active_session(end_time=obs.timestamp)
+        else:
+            self._is_disconnected = False
+
     def _handle_window_observation(self, obs: WindowObservation) -> None:
+        if self.is_away:
+            return
+
         app_name = obs.app_name
         timestamp = obs.timestamp
         title_hash, title_ext = self.key_manager.hash_title(obs.window_title)
