@@ -18,60 +18,40 @@ CONSENT_VERSION = "1.0.0"
 
 
 class ConsentManager:
-    """Manages employee consent for Live Capture and Past Import."""
+    """Records that (and when) the employee consented. Which past sources were chosen
+    is a setting of the Recorder, kept in one place only."""
 
     def __init__(self, storage_dir: str | Path):
         self.storage_dir = Path(storage_dir)
         self.consent_file = self.storage_dir / "consent.json"
 
     def has_consent(self) -> bool:
-        """Returns True if valid consent has been granted."""
         data = self._read_file()
         return bool(data and data.get("consented") is True)
 
-    def get_enabled_sources(self) -> list[str]:
-        """Returns the list of enabled past sources.
-
-        Default to all sources if not yet consented.
-        """
-        data = self._read_file()
-        if data and "enabled_sources" in data:
-            return list(data["enabled_sources"])
-        return list(ALL_PAST_SOURCES)
-
     def get_consent_timestamp(self) -> datetime | None:
-        """Returns the datetime when consent was granted, or None."""
         data = self._read_file()
-        if data and data.get("granted_at"):
-            try:
-                return datetime.fromisoformat(data["granted_at"])
-            except ValueError:
-                return None
-        return None
+        try:
+            return datetime.fromisoformat(data["granted_at"]) if data else None
+        except (KeyError, ValueError):
+            return None
 
-    def grant_consent(self, enabled_sources: list[str]) -> None:
-        """Records consent with the chosen past data sources."""
+    def grant_consent(self) -> None:
         self.storage_dir.mkdir(parents=True, exist_ok=True)
-        now = datetime.now(timezone.utc)
         payload: dict[str, Any] = {
             "version": CONSENT_VERSION,
             "consented": True,
-            "granted_at": now.isoformat(),
-            "enabled_sources": list(enabled_sources),
+            "granted_at": datetime.now(timezone.utc).isoformat(),
         }
         with open(self.consent_file, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, ensure_ascii=False)
-
-    def revoke_consent(self) -> None:
-        """Revokes consent."""
-        if self.consent_file.exists():
-            self.consent_file.unlink()
 
     def _read_file(self) -> dict[str, Any] | None:
         if not self.consent_file.exists():
             return None
         try:
             with open(self.consent_file, encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+            return data if isinstance(data, dict) else None
         except (json.JSONDecodeError, OSError):
             return None

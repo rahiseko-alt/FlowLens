@@ -18,13 +18,15 @@ from typing import Any
 
 import pyzipper
 
+from flowlens import __version__
 from flowlens.core import sanitize
 from flowlens.core.storage import INTERVAL_TABLES, SCHEMA_VERSION, TABLES, Storage, ts
 from flowlens.core.summary import generate_summary
 
-APPLICATION_VERSION = "0.2.0"
+APPLICATION_VERSION = __version__
 
 _SYMBOL_RE = re.compile(r"^[0-9a-f]{16}$")
+_SOURCE_RE = re.compile(r"^[a-z_]{1,32}$")
 
 README_TEXT = """FlowLens Diagnostic Export
 ==========================
@@ -68,20 +70,30 @@ and control_events; the same symbol means the same window title.
 
 @dataclass
 class _Report:
+    """Counts only. Every number here was measured during this export."""
+
     excluded_by_table: dict[str, int]
+    inside_pause: int = 0
     cleared_values: int = 0
 
     def as_dict(self, password_rows: int) -> dict[str, Any]:
         return {
             "excluded_app_records": sum(self.excluded_by_table.values()),
             "excluded_app_records_by_table": self.excluded_by_table,
+            "records_inside_pauses_removed": self.inside_pause,
             "password_field_typing_records": password_rows,
             "values_cleared_on_export": self.cleared_values,
-            "typed_text_exported": 0,
-            "clipboard_contents_exported": 0,
-            "full_urls_exported": 0,
-            "screenshots_exported": 0,
         }
+
+
+# Live tables whose rows must not fall inside a pause: (start column, end column).
+_PAUSE_CHECKED = {
+    "app_sessions": ("start_time", "end_time"),
+    "typing_activities": ("start_time", "end_time"),
+    "operation_events": ("timestamp", "timestamp"),
+    "clipboard_transfers": ("copy_time", "copy_time"),
+    "control_events": ("timestamp", "timestamp"),
+}
 
 
 def write_export(
@@ -95,6 +107,7 @@ def write_export(
     device_id: str,
     created_at: datetime,
     work_dir: Path,
+    tmp_prefix: str = "flowlens-tmp-",
 ) -> int:
     """Writes the encrypted export and returns the number of exported records."""
     if not password:
@@ -105,11 +118,17 @@ def write_export(
     destination.parent.mkdir(parents=True, exist_ok=True)
     # The plain SQLite copy lives next to the live database (same protection),
     # not in the system temp folder, and is removed as soon as the ZIP is written.
-    with tempfile.TemporaryDirectory(dir=work_dir) as tmp:
+    with tempfile.TemporaryDirectory(dir=work_dir, prefix=tmp_prefix) as tmp:
         db_path = Path(tmp) / "data.sqlite"
         target = Storage(db_path)
+        target.close()
         report = _Report(excluded_by_table={})
         counts: dict[str, int] = {}
+        pauses = [
+            (r["start_time"], r["end_time"])
+            for r in storage.rows("excluded_intervals", start, end)
+            if r["reason"] == "pause"
+        ]
         conn = target.connect()
         try:
             for table, spec in TABLES.items():
@@ -132,6 +151,9 @@ def write_export(
                             }
                             if _trim(row, start, end):
                                 _insert(conn, "excluded_intervals", row)
+                        continue
+                    if table in _PAUSE_CHECKED and _overlaps(row, _PAUSE_CHECKED[table], pauses):
+                        report.inside_pause += 1
                         continue
                     if table in INTERVAL_TABLES and not _trim(row, start, end):
                         continue
@@ -192,6 +214,22 @@ def _trim(row: dict[str, Any], start: datetime, end: datetime) -> bool:
     return True
 
 
+def _overlaps(row: dict[str, Any], cols: tuple[str, str], pauses: list[tuple[str, str]]) -> bool:
+    row_start, row_end = row[cols[0]], row[cols[1]]
+    return any(row_start < p_end and row_end > p_start for p_start, p_end in pauses)
+
+
+_CHOICES = {
+    "event_type": sanitize.CONTROL_EVENT_TYPES | sanitize.SYSTEM_EVENT_TYPES,
+    "operation_type": sanitize.OPERATION_TYPES,
+    "action": sanitize.CLIPBOARD_ACTIONS,
+    "data_type": sanitize.CLIPBOARD_DATA_TYPES,
+    "reason": frozenset({"pause", "excluded_app"}),
+    "status": frozenset({"success", "partial", "failed"}),
+    "state": sanitize.CONTROL_STATES,
+}
+
+
 def _resanitize(row: dict[str, Any]) -> int:
     """Re-applies the recording rules to every column. Returns how many values were cleared."""
     cleared = 0
@@ -215,8 +253,10 @@ def _resanitize(row: dict[str, Any]) -> int:
             put(col, sanitize.domain(value))
         elif col in ("automation_id", "class_name", "framework_id", "control_type"):
             put(col, sanitize.identifier(value))
-        elif col == "state":
-            put(col, sanitize.choice(value, sanitize.CONTROL_STATES))
+        elif col in _CHOICES:
+            put(col, sanitize.choice(value, _CHOICES[col]))
+        elif col == "source":
+            put(col, value if isinstance(value, str) and _SOURCE_RE.match(value) else "")
         elif col == "error":
             put(col, value if value and sanitize.error_code(value) == value else (value and ""))
     return cleared

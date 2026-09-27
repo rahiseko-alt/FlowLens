@@ -1,8 +1,9 @@
 """The resident Collector: consent, Past Import, then Live Capture from the tray.
 
 Threads:
-- main thread: the hidden window (tray, lock/sleep messages), the keyboard and
-  mouse hooks, and every Tk screen;
+- main thread: the hidden window (tray, lock/sleep messages) and every Tk screen;
+- "hooks": the keyboard and mouse hooks and nothing else, so a busy screen never
+  delays keyboard input or gets the hooks removed by Windows;
 - "activity": foreground window and idle polling;
 - "input": turns hook events, clipboard changes and focus changes into observations.
 """
@@ -49,15 +50,21 @@ class CollectorApp:
             self.recorder,
             on_status=self.show_status,
             on_settings=self.show_settings,
-            on_exit=self.stop,
+            on_exit=self.exit_by_user,
         )
 
-    def run(self) -> int:
+    def run(self, watchdog: bool = False) -> int:
+        """`watchdog`: started by the scheduled task that restarts FlowLens after a crash.
+        It does nothing if FlowLens is running, or if the employee chose 終了 today."""
+        if watchdog and self.recorder.user_exited:
+            return 0
         try:
             self.lock.acquire()
         except AlreadyRunningError:
             self.log.info("already running")
             return 0
+        if not watchdog:
+            self.recorder.user_exited = False  # a login or a manual start clears it
         try:
             self.log.info("collector started")
             if not self.consent.has_consent() and not self._first_run():
@@ -66,7 +73,7 @@ class CollectorApp:
             self.activity.start()
             self.input.start()
             self.tray.create()
-            self.hooks.install()
+            self.hooks.start()
             self.log.info("live capture started")
             self.tray.run()
             return 0
@@ -81,11 +88,13 @@ class CollectorApp:
         dialog = ConsentDialog()
         if not dialog.show():
             return False
-        self.consent.grant_consent(dialog.selected_sources)
+        self.consent.grant_consent()
         self.recorder.set_enabled_past_sources(dialog.selected_sources)
         if getattr(sys, "frozen", False):
             autostart.set_autostart("FlowLens", f'"{sys.executable}"')
-        report = run_past_import_with_progress(self.recorder, windows_past_providers())
+        report = run_past_import_with_progress(
+            self.recorder, windows_past_providers(self.storage_dir)
+        )
         self.log.info(
             "past import: %s", {name: result["status"] for name, result in report.items()}
         )
@@ -94,8 +103,9 @@ class CollectorApp:
     def read_more_sources(self, sources: list[str]) -> dict:
         enabled = set(self.recorder.get_enabled_past_sources() or []) | set(sources)
         self.recorder.set_enabled_past_sources(sorted(enabled))
-        self.consent.grant_consent(sorted(enabled))
-        providers = {k: v for k, v in windows_past_providers().items() if k in sources}
+        providers = {
+            k: v for k, v in windows_past_providers(self.storage_dir).items() if k in sources
+        }
         return run_past_import_with_progress(self.recorder, providers)
 
     def show_status(self) -> None:
@@ -106,12 +116,18 @@ class CollectorApp:
     def show_settings(self) -> None:
         SettingsWindow(self.recorder, self.read_more_sources).show()
 
+    def exit_by_user(self) -> None:
+        """終了 from the tray: stay stopped until the next login, even for the watchdog."""
+        self.recorder.user_exited = True
+        self.stop()
+
     def stop(self) -> None:
-        self.hooks.uninstall()
+        self.hooks.stop()
         self.activity.stop()
         self.input.stop()
         self.recorder.flush()
 
 
-def main() -> int:
-    return CollectorApp().run()
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    return CollectorApp().run(watchdog="--watchdog" in args)

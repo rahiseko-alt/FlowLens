@@ -14,11 +14,17 @@ def generate_summary(db_path: str | Path) -> dict[str, Any]:
         def pairs(sql: str) -> dict[str, Any]:
             return {row[0]: row[1] for row in conn.execute(sql)}
 
+        # foreground_switches: how often the app came to the front from another app
+        # (a new title in the same app is a new session but not a switch).
         live_apps = {
-            app: {"duration_seconds": dur, "session_count": cnt}
-            for app, dur, cnt in conn.execute(
-                "SELECT app_name, SUM(duration_seconds), COUNT(*) FROM app_sessions "
-                "WHERE is_past = 0 GROUP BY app_name ORDER BY SUM(duration_seconds) DESC"
+            app: {"duration_seconds": dur, "session_count": cnt, "foreground_switches": sw}
+            for app, dur, cnt, sw in conn.execute(
+                "SELECT app_name, SUM(duration_seconds), COUNT(*), "
+                "SUM(CASE WHEN prev IS NULL OR prev != app_name THEN 1 ELSE 0 END) FROM ("
+                "  SELECT app_name, duration_seconds, "
+                "  LAG(app_name) OVER (ORDER BY start_time) AS prev "
+                "  FROM app_sessions WHERE is_past = 0"
+                ") GROUP BY app_name ORDER BY SUM(duration_seconds) DESC"
             )
         }
         past_apps = {

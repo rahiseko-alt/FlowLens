@@ -31,7 +31,7 @@ def test_full_flow_without_network(no_network, recorder, export):
     recorder.import_past_providers(
         {
             "system_log": lambda: [PastSystemEventObservation("boot", at(-60))],
-            "browser_history": lambda: [PastBrowserObservation("a.example", at(-30))],
+            "browser_history": lambda: [PastBrowserObservation("a.example.com", at(-30))],
         }
     )
     recorder.observe(WindowObservation(timestamp=at(0), app_name="chrome.exe"))

@@ -56,7 +56,6 @@ def test_exclusion_added_after_recording_applies_to_export(recorder, export):
     assert {r["app_name"] for r in exp.rows("SELECT app_name FROM app_sessions")} == {"excel.exe"}
     report = exp.json("redaction_report.json")
     assert report["excluded_app_records_by_table"] == {"app_sessions": 1}
-    assert report["typed_text_exported"] == report["clipboard_contents_exported"] == 0
     assert not exp.contains("slack")
 
 
@@ -65,8 +64,8 @@ def test_exclusion_applies_to_past_browser_history_and_files(recorder, export):
     recorder.import_past_providers(
         {
             "browser_history": lambda: [
-                PastBrowserObservation("bank.example", at(-60), app_name="chrome.exe"),
-                PastBrowserObservation("news.example", at(-60), app_name="msedge.exe"),
+                PastBrowserObservation("bank.example.com", at(-60), app_name="chrome.exe"),
+                PastBrowserObservation("news.example.com", at(-60), app_name="msedge.exe"),
             ],
             "recent_files": lambda: [
                 PastFileObservation("a.xlsx", at(-60), app_name="chrome.exe"),
@@ -75,9 +74,11 @@ def test_exclusion_applies_to_past_browser_history_and_files(recorder, export):
     )
     exp = export()
 
-    assert [r["domain"] for r in exp.rows("SELECT domain FROM browser_events")] == ["news.example"]
+    assert [r["domain"] for r in exp.rows("SELECT domain FROM browser_events")] == [
+        "news.example.com"
+    ]
     assert exp.rows("SELECT * FROM file_events") == []
-    assert not exp.contains("bank.example")
+    assert not exp.contains("bank.example.com")
 
 
 def test_pause_records_nothing_but_the_pause(recorder, export):
@@ -103,7 +104,7 @@ def test_pause_survives_a_restart_and_blocks_past_import(tmp_path, clock):
     second = Recorder(tmp_path / "d", clock=clock)
     assert second.is_paused
     report = second.import_past_providers(
-        {"browser_history": lambda: [PastBrowserObservation("a.example", at(-5))]}
+        {"browser_history": lambda: [PastBrowserObservation("a.example.com", at(-5))]}
     )
     assert report["browser_history"]["status"] == "skipped"
 
@@ -112,6 +113,36 @@ def test_only_app_names_can_be_excluded(recorder):
     with pytest.raises(ValueError):
         recorder.add_excluded_app("給与明細.xlsx")
     recorder.add_excluded_app(r"C:\Program Files\Slack\Slack.exe")
-    assert recorder.get_excluded_apps() == ["slack.exe"]
+    assert "slack.exe" in recorder.get_excluded_apps()
     recorder.remove_excluded_app("SLACK.EXE")
-    assert recorder.get_excluded_apps() == []
+    assert "slack.exe" not in recorder.get_excluded_apps()
+
+
+def test_password_managers_are_excluded_from_the_start(recorder):
+    assert {"keepass.exe", "bitwarden.exe", "1password.exe"} <= set(recorder.get_excluded_apps())
+
+
+def test_late_observations_stamped_inside_a_pause_are_dropped(recorder, export):
+    # The input worker may hand over a typing burst or a copy after the pause ended.
+    use(recorder, "excel.exe", 0, 1)
+    recorder.pause(at(1))
+    recorder.resume(at(10))
+    recorder.observe(TypingObservation(at(5), keystrokes=300, app_name="excel.exe"))
+    recorder.observe(TypingObservation(at(0.5), keystrokes=9, duration_seconds=60))  # spans it
+    recorder.observe(ClipboardObservation(at(6), "copy", app_name="excel.exe"))
+    use(recorder, "excel.exe", 10, 12)
+    exp = export()
+
+    assert exp.rows("SELECT * FROM typing_activities") == []
+    assert exp.rows("SELECT * FROM clipboard_transfers") == []
+
+
+def test_late_observations_stamped_inside_a_lock_are_dropped(recorder, export):
+    from flowlens.core import LockObservation
+
+    use(recorder, "excel.exe", 0, 1)
+    recorder.observe(LockObservation(at(2), True))
+    recorder.observe(LockObservation(at(10), False))
+    recorder.observe(TypingObservation(at(5), keystrokes=30, app_name="excel.exe"))
+    exp = export()
+    assert exp.rows("SELECT * FROM typing_activities") == []

@@ -8,7 +8,7 @@ No table has a column for user content (ADR 0002).
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -184,23 +184,37 @@ def _schema_sql() -> str:
 
 
 class Storage:
-    """A thin, content-free layer over one SQLite file."""
+    """A thin, content-free layer over one SQLite file.
+
+    One connection is kept open and shared by the threads that call the Recorder;
+    a lock serialises access to it.
+    """
 
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
+        self._conn = self._open()
         self._init_db()
 
-    def connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, timeout=30)
+    def _open(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, timeout=30, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode = WAL;")
         conn.execute("PRAGMA synchronous = NORMAL;")
         return conn
 
+    def connect(self) -> sqlite3.Connection:
+        """A separate connection, for building an export database."""
+        return self._open()
+
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()
+
     def _init_db(self) -> None:
-        conn = self.connect()
-        try:
+        with self._lock:
+            conn = self._conn
             has_version = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
             ).fetchone()
@@ -222,47 +236,44 @@ class Storage:
                 "INSERT OR IGNORE INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,)
             )
             conn.commit()
-        finally:
-            conn.close()
 
     def insert(self, table: str, row: dict[str, Any]) -> bool:
         """Inserts one row; returns False if a unique index says it is already stored."""
-        spec = TABLES[table]
-        values = [_to_db(row.get(c)) for c in spec.columns]
-        placeholders = ", ".join("?" for _ in spec.columns)
-        conn = self.connect()
-        try:
-            cur = conn.execute(
-                f"INSERT OR IGNORE INTO {table} ({', '.join(spec.columns)}) "
-                f"VALUES ({placeholders})",
-                values,
-            )
-            conn.commit()
-            return cur.rowcount > 0
-        finally:
-            conn.close()
+        return self.insert_many(table, [row]) > 0
 
-    def upsert(self, table: str, row: dict[str, Any]) -> bool:
-        """Inserts or replaces the row that shares the table's unique key."""
+    def insert_many(self, table: str, rows: list[dict[str, Any]]) -> int:
+        """Inserts rows in one transaction; returns how many were new."""
         spec = TABLES[table]
-        values = [_to_db(row.get(c)) for c in spec.columns]
+        sql = (
+            f"INSERT OR IGNORE INTO {table} ({', '.join(spec.columns)}) "
+            f"VALUES ({', '.join('?' for _ in spec.columns)})"
+        )
+        return self._write(sql, spec, rows)
+
+    def upsert_many(self, table: str, rows: list[dict[str, Any]]) -> int:
+        """Inserts rows, replacing those that share the table's unique key."""
+        spec = TABLES[table]
         updates = ", ".join(f"{c} = excluded.{c}" for c in spec.columns if c not in spec.unique)
-        conn = self.connect()
-        try:
-            conn.execute(
-                f"INSERT INTO {table} ({', '.join(spec.columns)}) "
-                f"VALUES ({', '.join('?' for _ in spec.columns)}) "
-                f"ON CONFLICT({', '.join(spec.unique)}) DO UPDATE SET {updates}",
-                values,
-            )
-            conn.commit()
-            return True
-        finally:
-            conn.close()
+        sql = (
+            f"INSERT INTO {table} ({', '.join(spec.columns)}) "
+            f"VALUES ({', '.join('?' for _ in spec.columns)}) "
+            f"ON CONFLICT({', '.join(spec.unique)}) DO UPDATE SET {updates}"
+        )
+        return self._write(sql, spec, rows)
+
+    def _write(self, sql: str, spec: TableSpec, rows: list[dict[str, Any]]) -> int:
+        if not rows:
+            return 0
+        with self._lock:
+            before = self._conn.total_changes
+            with self._conn:
+                for row in rows:
+                    self._conn.execute(sql, [_to_db(row.get(c)) for c in spec.columns])
+            return self._conn.total_changes - before
 
     def rows(
         self, table: str, start: datetime | None = None, end: datetime | None = None
-    ) -> Iterator[dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Rows of `table` that touch [start, end]."""
         spec = TABLES[table]
         query = f"SELECT {', '.join(spec.columns)} FROM {table} WHERE 1=1"
@@ -274,17 +285,13 @@ class Storage:
             query += f" AND {spec.start} <= ?"
             params.append(ts(end))
         query += f" ORDER BY {spec.start}"
-        conn = self.connect()
-        try:
-            for row in conn.execute(query, params):
-                yield dict(row)
-        finally:
-            conn.close()
+        with self._lock:
+            return [dict(row) for row in self._conn.execute(query, params)]
 
     def delete_range(self, start: datetime | None, end: datetime | None) -> None:
         """Deletes every record that touches [start, end] (None = open end)."""
-        conn = self.connect()
-        try:
+        deleted = 0
+        with self._lock, self._conn:
             for name, spec in TABLES.items():
                 query = f"DELETE FROM {name} WHERE 1=1"
                 params: list[str] = []
@@ -294,60 +301,53 @@ class Storage:
                 if end is not None:
                     query += f" AND {spec.start} <= ?"
                     params.append(ts(end))
-                conn.execute(query, params)
-            conn.commit()
-        finally:
-            conn.close()
-        self._reclaim_space()
+                deleted += self._conn.execute(query, params).rowcount
+        if deleted:
+            self._reclaim_space()
 
-    def delete_before(self, cutoff: datetime) -> None:
+    def delete_before(self, cutoff: datetime) -> int:
         """Retention: deletes every record that ended before `cutoff`."""
-        conn = self.connect()
-        try:
+        deleted = 0
+        with self._lock, self._conn:
             for name, spec in TABLES.items():
-                conn.execute(f"DELETE FROM {name} WHERE {spec.end} < ?", (ts(cutoff),))
-            conn.execute("DELETE FROM export_history WHERE created_at < ?", (ts(cutoff),))
-            conn.commit()
-        finally:
-            conn.close()
-        self._reclaim_space()
+                deleted += self._conn.execute(
+                    f"DELETE FROM {name} WHERE {spec.end} < ?", (ts(cutoff),)
+                ).rowcount
+            self._conn.execute("DELETE FROM export_history WHERE created_at < ?", (ts(cutoff),))
+        if deleted:
+            self._reclaim_space()
+        return deleted
 
     def _reclaim_space(self) -> None:
-        conn = sqlite3.connect(self.db_path, isolation_level=None, timeout=30)
-        try:
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            conn.execute("VACUUM")
-        except sqlite3.OperationalError:
-            pass  # another connection is busy; space is reclaimed next time
-        finally:
-            conn.close()
+        with self._lock:
+            try:
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                self._conn.isolation_level = None
+                self._conn.execute("VACUUM")
+            except sqlite3.OperationalError:
+                pass  # another connection is busy; space is reclaimed next time
+            finally:
+                self._conn.isolation_level = ""
 
     def record_export(self, created_at: datetime, start: datetime, end: datetime, count: int):
-        conn = self.connect()
-        try:
-            conn.execute(
+        with self._lock, self._conn:
+            self._conn.execute(
                 "INSERT INTO export_history (created_at, period_start, period_end, record_count) "
                 "VALUES (?, ?, ?, ?)",
                 (ts(created_at), ts(start), ts(end), count),
             )
-            conn.commit()
-        finally:
-            conn.close()
 
     def live_stats(self) -> dict[str, Any]:
-        conn = self.connect()
-        try:
-            row = conn.execute(
+        with self._lock:
+            row = self._conn.execute(
                 "SELECT MIN(start_time), COALESCE(SUM(duration_seconds), 0), COUNT(*) "
                 "FROM app_sessions WHERE is_past = 0"
             ).fetchone()
-            return {
-                "first_live_session": row[0],
-                "live_seconds": float(row[1]),
-                "live_session_count": int(row[2]),
-            }
-        finally:
-            conn.close()
+        return {
+            "first_live_session": row[0],
+            "live_seconds": float(row[1]),
+            "live_session_count": int(row[2]),
+        }
 
 
 def _to_db(value: Any) -> Any:

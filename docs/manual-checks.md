@@ -26,6 +26,8 @@
 | 1-4 | 画面右下を見る | アイコンがあり、ポイントすると「FlowLens: 記録中」 | |
 | 1-5 | スタートメニューに「FlowLens」がある。起動しても2つ目は起動しない | | |
 | 1-6 | サインアウトして再度サインイン | 自動で起動し、説明画面は出ない | |
+| 1-7 | タスクマネージャーで flowlens.exe を強制終了し、10分待つ | 自動で再び起動する（タスク スケジューラの「FlowLens watchdog」） | |
+| 1-8 | アイコン → FlowLens を終了する。10分待つ | 起動しない。次のサインインで起動する | |
 
 ## 2. 記録（#15, #16）
 
@@ -41,6 +43,9 @@
 | 2-8 | Excel の「保存」ボタンをクリック | `control_events` に `click` と `ButtonControl` | |
 | 2-9 | Chrome で `https://example.com/?q=test` を開く | `control_events` の `navigate` に `example.com` だけ。`q=test` は無い | |
 | 2-10 | Chrome のアドレスバーに文字を打っている間 | その文字は記録されない | |
+| 2-11 | Web ページの入力欄に「yamada.taro」と入力してからページを移動 | `browser_domain` に yamada.taro が無い | |
+| 2-12 | パスワード欄で Enter を押す／貼り付ける | その Enter と Ctrl+V は `operation_events` にも `clipboard_transfers` にも無い | |
+| 2-13 | ログ（`%LOCALAPPDATA%\FlowLens\logs\collector.log`）を見る | 「input focus failed」などが繰り返し出ていない | |
 
 ## 3. 一時停止・除外・削除・書き出し（#18, #20）
 
@@ -59,7 +64,7 @@
 | # | 手順 | 期待 | 結果 |
 | --- | --- | --- | --- |
 | 4-1 | リソースモニター → ネットワーク で flowlens.exe を1時間見る | 通信が無い | |
-| 4-2 | 設定 → アプリ → FlowLens をアンインストール | 起動中でも止まってから消える。データを消すか聞かれる | |
+| 4-2 | 設定 → アプリ → FlowLens をアンインストール | 起動中でも止まってから消える。データを消すか聞かれる。タスク スケジューラの「FlowLens watchdog」も消える | |
 | 4-3 | 「いいえ」 | `%LOCALAPPDATA%\FlowLens` が残る | |
 
 ## 5. 過去分の読み込み元（#4, #17）

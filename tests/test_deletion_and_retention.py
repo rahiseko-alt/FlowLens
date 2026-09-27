@@ -56,7 +56,7 @@ def test_retention_deletes_old_records_automatically(recorder, clock, export):
     clock.now = T0
     session(recorder, T0)
     recorder.import_past_providers(
-        {"browser_history": lambda: [PastBrowserObservation("a.example", T0)]}
+        {"browser_history": lambda: [PastBrowserObservation("a.example.com", T0)]}
     )
     clock.now = T0 + timedelta(days=45)  # default retention is 30 days
     recorder.observe(WindowObservation(timestamp=clock.now, app_name="excel.exe"))

@@ -36,7 +36,7 @@
 
 | 表 | 1行の意味 | 主な列 |
 | --- | --- | --- |
-| `app_sessions` | 1つのアプリ（題名）が前面にあった一続きの時間。離席・ロック・スリープは含まない | `app_name`, `title_symbol`, `title_ext`, `start_time`, `end_time`, `duration_seconds` |
+| `app_sessions` | 1つのアプリ（題名）が前面にあった一続きの時間。離席・ロック・スリープは含まない。題名が変わると別の行になる（アプリを切り替えた回数は `summary.json` の `foreground_switches`） | `app_name`, `title_symbol`, `title_ext`, `start_time`, `end_time`, `duration_seconds` |
 | `typing_activities` | 入力のひとまとまり（2秒以上止まると区切る） | `app_name`, `title_symbol`, `keystroke_count`, `duration_seconds`, `is_password` |
 | `operation_events` | 操作キー | `operation_type`（`ctrl+c` `ctrl+x` `ctrl+v` `enter` `tab` `escape` `shortcut`） |
 | `clipboard_transfers` | コピー（切り取り）から貼り付けまでの1回 | `source_app`, `target_app`（空 = 貼り付けを検出できず）, `data_type`, `data_length` |
@@ -60,7 +60,7 @@
 1. **全体像**: 「`summary.json` と `manifest.json` を読んで、期間、記録された時間、よく使うアプリの上位を表にして」
 2. **過去分での目星**（入れてすぐの提案用）: 「`past_app_stats` と `file_events` と `browser_events` から、よく使うアプリ、よく開く拡張子、毎日のように訪れるサイトを挙げて。数字は SQL で出し、推測は推測と書いて」
 3. **流れの発見**（記録分）: 「`app_sessions` を時刻順に並べ、同じアプリの移り変わり（例: Outlook → Chrome → Excel）が何回繰り返されているか、曜日と時間帯つきで数えて」
-4. **転記の発見**: 「`clipboard_transfers` で、どのアプリからどのアプリへの転記が多いか。同じ `title_symbol` の画面への転記が繰り返されていないか」
+4. **転記の発見**: 「`clipboard_transfers` で、どのアプリからどのアプリへの転記が多いか。貼り付け時刻（`paste_time`）に前面にあった `app_sessions` の `title_symbol` と突き合わせて、同じ画面への転記が繰り返されていないか」
 5. **候補の評価**: 「上の結果から、自動化の候補を効果の大きい順に3〜5件。回数×1回の時間で月あたりの時間を出し、推定値であることを明記して」
 
 注意:

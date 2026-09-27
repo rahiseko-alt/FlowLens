@@ -8,6 +8,7 @@ works the same on any OS and is covered by the tests.
 
 from __future__ import annotations
 
+import shutil
 import threading
 from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta, timezone
@@ -39,6 +40,8 @@ from flowlens.core.storage import Storage
 
 PAST_IMPORT_DAYS = 30
 RETENTION_CHECK_INTERVAL = timedelta(hours=1)
+BLACKOUT_MEMORY = timedelta(days=1)
+TMP_PREFIX = "flowlens-tmp-"
 EXPORT_PRESETS = {"last_7_days": 7, "last_14_days": 14, "last_30_days": 30}
 DELETE_PRESETS = {"last_7_days": 7, "last_30_days": 30}
 
@@ -73,6 +76,14 @@ class Recorder:
         self._session: dict[str, Any] | None = None  # the open App Session
         self._pending_copy: dict[str, Any] | None = None
         self._last_retention_check: datetime | None = None
+        # Pauses and absences seen by this process, as [start, end or None]. Observations
+        # that arrive late but are stamped inside one of them are dropped.
+        self._blackouts: list[list[datetime | None]] = []
+        paused_since = self._config.get("paused_since")
+        if paused_since:
+            self._blackouts.append([datetime.fromisoformat(paused_since), None])
+        for leftover in self.storage_dir.glob(f"{TMP_PREFIX}*"):
+            shutil.rmtree(leftover, ignore_errors=True)  # from an export cut short
 
     # ------------------------------------------------------------------ settings
 
@@ -85,17 +96,28 @@ class Recorder:
             if self.is_paused:
                 return
             self.flush()
-            self._config.set("paused_since", _utc(timestamp or self.clock()).isoformat())
+            start = _utc(timestamp or self.clock())
+            self._config.set("paused_since", start.isoformat())
+            self._blackouts.append([start, None])
 
     def resume(self, timestamp: datetime | None = None) -> None:
         with self._lock:
             since = self._config.get("paused_since")
             if since is None:
                 return
+            end = _utc(timestamp or self.clock())
             self._config.set("paused_since", None)
-            self._insert_interval(
-                datetime.fromisoformat(since), _utc(timestamp or self.clock()), "pause"
-            )
+            self._end_blackout(end)
+            self._insert_interval(datetime.fromisoformat(since), end, "pause")
+
+    @property
+    def user_exited(self) -> bool:
+        """True after the employee chose 終了 until the next login (read by the watchdog)."""
+        return bool(self._config.get("user_exited"))
+
+    @user_exited.setter
+    def user_exited(self, value: bool) -> None:
+        self._config.set("user_exited", bool(value))
 
     @property
     def idle_threshold_seconds(self) -> float:
@@ -159,10 +181,10 @@ class Recorder:
                 # Tracked even while paused, so an unlock during a pause is not missed.
                 self._handle_away(observation, getattr(observation, _AWAY_TYPES[obs_type]))
                 return
-            if self.is_paused:
-                return
-            if self._away:
-                return  # nothing is recorded while idle, locked, asleep or disconnected
+            if self.is_paused or self._away:
+                return  # nothing is recorded while paused, idle, locked, asleep or disconnected
+            if self._in_blackout(observation):
+                return  # arrived late, but happened during a pause or an absence
             handler = {
                 WindowObservation: self._handle_window,
                 TypingObservation: self._handle_typing,
@@ -185,13 +207,32 @@ class Recorder:
 
     def _handle_away(self, obs: Observation, away: bool) -> None:
         kind = type(obs)
+        when = _utc(obs.timestamp)
         if away:
             if not self._away:
                 # The session ends when the absence began (for idle: the last input).
-                self._close_session(_utc(obs.timestamp))
+                self._close_session(when)
+                self._blackouts.append([when, None])
             self._away.add(kind)
-        else:
+        elif kind in self._away:
             self._away.discard(kind)
+            if not self._away:
+                self._end_blackout(when)
+
+    def _end_blackout(self, when: datetime) -> None:
+        for blackout in self._blackouts:
+            if blackout[1] is None:
+                blackout[1] = max(when, blackout[0])
+        horizon = when - BLACKOUT_MEMORY
+        self._blackouts = [b for b in self._blackouts if b[1] is None or b[1] > horizon]
+
+    def _in_blackout(self, obs: Observation) -> bool:
+        start = _utc(obs.timestamp)
+        end = start + timedelta(seconds=max(0.0, getattr(obs, "duration_seconds", 0.0)))
+        return any(
+            start < (b_end or datetime.max.replace(tzinfo=timezone.utc)) and end >= b_start
+            for b_start, b_end in self._blackouts
+        )
 
     def _handle_window(self, obs: WindowObservation) -> None:
         now = _utc(obs.timestamp)
@@ -282,7 +323,7 @@ class Recorder:
     def _handle_operation(self, obs: OperationTypeObservation) -> None:
         app = self._app(obs.app_name)
         op = sanitize.choice(obs.operation_type, sanitize.OPERATION_TYPES)
-        if not op or self._is_excluded(app):
+        if not op or self._is_excluded(app) or obs.in_password:
             if op == "ctrl+v":
                 self._pending_copy = None  # pasted into an excluded app: forget the copy
             return
@@ -305,7 +346,7 @@ class Recorder:
         app = self._app(obs.app_name)
         now = _utc(obs.timestamp)
         if action == "paste":
-            if self._is_excluded(app):
+            if self._is_excluded(app) or obs.in_password:
                 self._pending_copy = None
             else:
                 self._finish_transfer(app, now)
@@ -382,8 +423,13 @@ class Recorder:
                 result = {"status": "skipped", "count": 0, "error": "not selected"}
             else:
                 try:
-                    count = self._import_records(source, provider())
-                    result = {"status": "success", "count": count, "error": None}
+                    records, warning = _split_warning(provider())
+                    count = self._import_records(source, records)
+                    result = {
+                        "status": "partial" if warning else "success",
+                        "count": count,
+                        "error": sanitize.error_code(warning) or None if warning else None,
+                    }
                 except Exception as exc:  # the reason is kept as a code, never a message
                     result = {"status": "failed", "count": 0, "error": _error_code(exc)}
             report[source] = result
@@ -402,17 +448,18 @@ class Recorder:
 
     def _import_records(self, source: str, records: Iterable[Any]) -> int:
         cutoff = _utc(self.clock()) - timedelta(days=PAST_IMPORT_DAYS)
-        inserted = 0
-        with self._lock:
+        batches: dict[str, list[dict[str, Any]]] = {}
+        with self._lock:  # settings (exclusions) must not change while rows are built
             for record in records:
                 row = self._past_row(record, source, cutoff)
-                if row is None:
-                    continue
-                table, values = row
-                if table == "past_app_stats":
-                    inserted += self.storage.upsert(table, values)
-                else:
-                    inserted += self.storage.insert(table, values)
+                if row is not None:
+                    batches.setdefault(row[0], []).append(row[1])
+        inserted = 0
+        for table, rows in batches.items():
+            if table == "past_app_stats":
+                inserted += self.storage.upsert_many(table, rows)
+            else:
+                inserted += self.storage.insert_many(table, rows)
         return inserted
 
     def _past_row(
@@ -506,9 +553,11 @@ class Recorder:
         raise ValueError(f"Unknown export range preset: {preset}")
 
     def export(self, time_range: TimeRange, password: str, destination: str | Path) -> Path:
-        """Writes the encrypted Diagnostic Export and returns its path."""
+        """Writes the encrypted Diagnostic Export and returns its path.
+
+        The App Session still in progress is not part of it; it is written when it ends.
+        """
         with self._lock:
-            self.flush()
             created = _utc(self.clock())
             start, end = _utc(time_range.start), _utc(time_range.end)
             count = write_export(
@@ -521,6 +570,7 @@ class Recorder:
                 device_id=self._keys.get_device_id(),
                 created_at=created,
                 work_dir=self.storage_dir,
+                tmp_prefix=TMP_PREFIX,
             )
             self.storage.record_export(created, start, end, count)
             return Path(destination)
@@ -529,8 +579,10 @@ class Recorder:
 
     def get_status(self) -> dict[str, Any]:
         with self._lock:
-            self.flush()
             stats = self.storage.live_stats()
+            if self._session is not None:
+                s = self._session
+                stats["live_seconds"] += (s["last_seen"] - s["start"]).total_seconds()
             size = sum(
                 p.stat().st_size for p in (self.db_path, Path(f"{self.db_path}-wal")) if p.exists()
             )
@@ -542,6 +594,13 @@ class Recorder:
                 "session_count": stats["live_session_count"],
                 "database_size_bytes": size,
             }
+
+
+def _split_warning(result: Any) -> tuple[Any, str | None]:
+    """A provider may return (records, warning) when only part of a source was readable."""
+    if isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], (str, type(None))):
+        return result[0], result[1]
+    return result, None
 
 
 def _error_code(exc: Exception) -> str:

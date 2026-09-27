@@ -138,7 +138,13 @@ def run_past_import_with_progress(
     table.pack(fill=tk.BOTH)
     close = ttk.Button(frame, text="閉じる", command=root.destroy, state=tk.DISABLED)
     close.pack(anchor=tk.E, pady=(12, 0))
-    labels = {"running": "読み込み中", "success": "完了", "skipped": "対象外", "failed": "読めず"}
+    labels = {
+        "running": "読み込み中",
+        "success": "完了",
+        "partial": "一部のみ",
+        "skipped": "対象外",
+        "failed": "読めず",
+    }
 
     def poll() -> None:
         while True:
@@ -152,7 +158,7 @@ def run_past_import_with_progress(
                 close.config(state=tk.NORMAL)
                 return
             name, result = item
-            reason = "" if result["status"] != "failed" else (result["error"] or "")
+            reason = result["error"] or "" if result["status"] in ("failed", "partial") else ""
             table.item(name, values=(labels[result["status"]], result["count"] or "", reason))
 
     threading.Thread(target=work, name="past-import", daemon=True).start()

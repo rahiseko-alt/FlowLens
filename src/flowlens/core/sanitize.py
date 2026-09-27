@@ -21,6 +21,15 @@ FILE_EXTENSIONS = frozenset(
     """.split()
 )
 
+# Generic top-level domains we accept (two-letter country codes are accepted as well).
+GENERIC_TLDS = frozenset(
+    """
+    com net org info biz edu gov mil int io app dev cloud site online tech ai co me tv
+    xyz shop store blog news work jobs page link live life world today top asia tokyo
+    osaka nagoya yokohama kyoto
+    """.split()
+)
+
 _EXT_RE = re.compile(r"\.([A-Za-z0-9]{1,5})(?=$|[\s\]\)\-–—|:*」』）】])")
 _EXE_RE = re.compile(r"^[a-z0-9][a-z0-9 ._()+-]{0,79}\.exe$")
 # Packaged (UWP) app ids, e.g. Microsoft.WindowsCalculator_8wekyb3d8bbwe!App
@@ -83,7 +92,16 @@ def domain(raw: str | None) -> str:
         value = re.split(r"[/?#]", value, maxsplit=1)[0]
         value = value.rsplit("@", 1)[-1].split(":", 1)[0]
     value = value.lower().rstrip(".")
-    return value if _HOST_RE.match(value) else ""
+    if not _HOST_RE.match(value):
+        return ""
+    # The last label must look like a real top-level domain, so that words such as
+    # "john.smith" or "report.xlsx" shown in an input box are not taken for hosts.
+    tld = value.rsplit(".", 1)[-1]
+    if tld in FILE_EXTENSIONS or not (
+        (len(tld) == 2 and tld.isalpha()) or tld in GENERIC_TLDS or tld.startswith("xn--")
+    ):
+        return ""
+    return value
 
 
 def identifier(raw: str | None) -> str:

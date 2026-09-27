@@ -191,3 +191,44 @@ def test_content_looking_identifiers_and_bad_schemes_are_dropped(recorder, expor
     assert row == {"automation_id": "", "class_name": "", "browser_domain": ""}
     assert not exp.contains("山田")
     assert not exp.contains("secret")
+
+
+def test_keys_and_pastes_in_password_fields_leave_nothing(recorder, export):
+    recorder.observe(ClipboardObservation(at(1), "copy", "text", 16, app_name="chrome.exe"))
+    recorder.observe(
+        OperationTypeObservation(at(2), "ctrl+v", app_name="chrome.exe", in_password=True)
+    )
+    recorder.observe(
+        OperationTypeObservation(at(2), "enter", app_name="chrome.exe", in_password=True)
+    )
+    exp = export()
+
+    assert exp.rows("SELECT * FROM operation_events") == []
+    assert exp.rows("SELECT * FROM clipboard_transfers") == []
+
+
+def test_looking_at_the_status_does_not_split_sessions_or_lose_copies(recorder, export):
+    from conftest import use
+
+    use(recorder, "chrome.exe", 0, 2)
+    recorder.observe(ClipboardObservation(at(2), "copy", app_name="chrome.exe"))
+    status = recorder.get_status()
+    use(recorder, "chrome.exe", 3, 4)
+    recorder.observe(OperationTypeObservation(at(4), "ctrl+v", app_name="excel.exe"))
+    exp = export()
+
+    assert status["recorded_seconds"] == 120
+    assert len(exp.rows("SELECT * FROM app_sessions")) == 1
+    assert exp.rows("SELECT target_app FROM clipboard_transfers") == [{"target_app": "excel.exe"}]
+
+
+def test_words_with_a_dot_are_not_taken_for_domains(recorder, export):
+    for text in ("john.smith", "report.xlsx", "yamada.taro"):
+        recorder.observe(
+            ControlMetadataObservation(at(1), browser_domain=text, app_name="chrome.exe")
+        )
+    exp = export()
+    assert {r["browser_domain"] for r in exp.rows("SELECT browser_domain FROM control_events")} == {
+        ""
+    }
+    assert not exp.contains("yamada")

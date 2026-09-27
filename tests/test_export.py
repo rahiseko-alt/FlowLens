@@ -112,3 +112,13 @@ def test_no_plain_copy_is_left_behind(recorder, export, tmp_path):
     export()
     leftovers = [p.name for p in (tmp_path / "data").rglob("*.sqlite")]
     assert leftovers == []
+
+
+def test_summary_counts_switches_not_title_changes(recorder, export):
+    use(recorder, "excel.exe", 0, 1, "a.xlsx - Excel")
+    use(recorder, "excel.exe", 2, 3, "b.xlsx - Excel")
+    use(recorder, "chrome.exe", 4, 5)
+    use(recorder, "excel.exe", 6, 7, "a.xlsx - Excel")
+    excel = export().json("summary.json")["live"]["apps"]["excel.exe"]
+    assert excel["session_count"] == 3
+    assert excel["foreground_switches"] == 2

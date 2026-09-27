@@ -36,14 +36,14 @@ def test_only_hosts_of_recent_http_visits(tmp_path, monkeypatch):
         [
             ("https://crm.example.com/customer/123?token=abc#frag", now - timedelta(days=1)),
             ("http://user:pw@intra.example.jp:8080/path", now - timedelta(days=2)),
-            ("https://search.example?q=給与", now - timedelta(days=3)),
+            ("https://search.example.com?q=給与", now - timedelta(days=3)),
             ("file:///C:/Users/yamada/secret.txt", now - timedelta(days=1)),
-            ("https://old.example/", now - timedelta(days=40)),
+            ("https://old.example.com/", now - timedelta(days=40)),
         ],
     )
     make_history(
         tmp_path / "Microsoft" / "Edge" / "User Data" / "Profile 1" / "History",
-        [("https://edge.example/x", now - timedelta(hours=5))],
+        [("https://edge.example.com/x", now - timedelta(hours=5))],
     )
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
 
@@ -53,8 +53,8 @@ def test_only_hosts_of_recent_http_visits(tmp_path, monkeypatch):
     assert seen == [
         ("chrome.exe", "crm.example.com"),
         ("chrome.exe", "intra.example.jp"),
-        ("chrome.exe", "search.example"),
-        ("msedge.exe", "edge.example"),
+        ("chrome.exe", "search.example.com"),
+        ("msedge.exe", "edge.example.com"),
     ]
     for obs in found:
         assert not set("/?#@:") & set(obs.domain)

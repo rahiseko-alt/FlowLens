@@ -25,6 +25,7 @@ from flowlens.core.models import (
     PastFileObservation,
     PastSystemEventObservation,
 )
+from flowlens.core.recorder import TMP_PREFIX
 
 try:
     import winreg
@@ -223,11 +224,14 @@ def _office_mru_keys(reg: Any, app_path: str) -> list[list[str]]:
     return lists
 
 
-def read_browser_history(max_days: int = 30) -> list[PastBrowserObservation]:
+def read_browser_history(
+    max_days: int = 30, work_dir: Path | None = None
+) -> list[PastBrowserObservation] | tuple[list[PastBrowserObservation], str]:
     """Visited hosts from Chrome and Edge profiles.
 
-    Each History database is copied first (the browser keeps it locked) and the copy
-    is deleted right after. Only the host part leaves SQLite.
+    Each History database is copied first (the browser keeps it locked) into the
+    FlowLens data folder, not the system temp folder, and deleted right after. Only the
+    host part leaves SQLite. If some profiles fail, returns (hosts, reason code).
     """
     local = os.environ.get("LOCALAPPDATA")
     if not local:
@@ -243,16 +247,20 @@ def read_browser_history(max_days: int = 30) -> list[PastBrowserObservation]:
                 continue
             files += 1
             try:
-                found.extend(_read_history(history, cutoff, exe))
+                found.extend(_read_history(history, cutoff, exe, work_dir))
             except Exception as exc:
                 errors.append(exc)
     if errors and len(errors) == files:
         raise errors[0]
+    if errors:
+        return found, f"{type(errors[0]).__name__} in {len(errors)} of {files} profiles"
     return found
 
 
-def _read_history(history: Path, cutoff: int, exe: str) -> list[PastBrowserObservation]:
-    with tempfile.TemporaryDirectory() as tmp:
+def _read_history(
+    history: Path, cutoff: int, exe: str, work_dir: Path | None
+) -> list[PastBrowserObservation]:
+    with tempfile.TemporaryDirectory(dir=work_dir, prefix=TMP_PREFIX) as tmp:
         copy = Path(tmp) / "History"
         shutil.copy2(history, copy)
         for suffix in ("-wal", "-journal"):
@@ -282,5 +290,9 @@ READERS: dict[str, Callable[[int], list[Any]]] = {
 }
 
 
-def windows_past_providers(max_days: int = 30) -> dict[str, Callable[[], list[Any]]]:
-    return {name: (lambda reader=reader: reader(max_days)) for name, reader in READERS.items()}
+def windows_past_providers(work_dir: Path, max_days: int = 30) -> dict[str, Callable[[], Any]]:
+    providers: dict[str, Callable[[], Any]] = {
+        name: (lambda reader=reader: reader(max_days)) for name, reader in READERS.items()
+    }
+    providers["browser_history"] = lambda: read_browser_history(max_days, work_dir)
+    return providers

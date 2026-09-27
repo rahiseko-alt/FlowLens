@@ -46,6 +46,7 @@ import threading
 from ctypes import wintypes
 from datetime import datetime, timedelta, timezone
 
+import psutil
 import uiautomation as auto
 import win32gui
 
@@ -66,6 +67,7 @@ kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 shell32 = ctypes.WinDLL("shell32", use_last_error=True)
 
 WH_KEYBOARD_LL, WH_MOUSE_LL = 13, 14
+WM_QUIT = 0x0012
 WM_KEYDOWN, WM_SYSKEYDOWN, WM_LBUTTONDOWN = 0x0100, 0x0104, 0x0201
 VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN = 0x11, 0x12, 0x5B, 0x5C
 MODIFIER_KEYS = {0x10, 0x11, 0x12, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, VK_LWIN, VK_RWIN, 0x14}
@@ -73,6 +75,7 @@ PLAIN_OPS = {0x0D: "enter", 0x09: "tab", 0x1B: "escape"}
 CTRL_OPS = {0x43: "ctrl+c", 0x58: "ctrl+x", 0x56: "ctrl+v"}
 CF_BITMAP, CF_DIB, CF_UNICODETEXT, CF_HDROP = 2, 8, 13, 15
 BROWSERS = {"chrome.exe", "msedge.exe"}
+OMNIBOX_CLASS = "OmniboxViewViews"
 TYPING_PAUSE = timedelta(seconds=2)
 
 LRESULT = ctypes.c_ssize_t
@@ -104,6 +107,25 @@ user32.SetWindowsHookExW.restype = wintypes.HHOOK
 user32.CallNextHookEx.argtypes = [wintypes.HHOOK, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM]
 user32.CallNextHookEx.restype = LRESULT
 user32.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
+user32.GetMessageW.argtypes = [
+    ctypes.POINTER(wintypes.MSG),
+    wintypes.HWND,
+    wintypes.UINT,
+    wintypes.UINT,
+]
+user32.GetMessageW.restype = wintypes.BOOL
+user32.TranslateMessage.argtypes = [ctypes.POINTER(wintypes.MSG)]
+user32.DispatchMessageW.argtypes = [ctypes.POINTER(wintypes.MSG)]
+user32.PostThreadMessageW.argtypes = [
+    wintypes.DWORD,
+    wintypes.UINT,
+    wintypes.WPARAM,
+    wintypes.LPARAM,
+]
+user32.GetForegroundWindow.restype = wintypes.HWND
+user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+kernel32.GetCurrentThreadId.restype = wintypes.DWORD
 user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
 user32.GetAsyncKeyState.restype = ctypes.c_short
 user32.GetClipboardSequenceNumber.restype = wintypes.DWORD
@@ -136,29 +158,61 @@ def classify_key(vk: int, is_sys: bool) -> str | None:
 
 
 class InputHooks:
-    """Low-level keyboard and mouse hooks. Install and run on a thread with a message loop.
+    """Low-level keyboard and mouse hooks on their own thread and message loop.
 
-    The callbacks only classify and enqueue; all work happens on InputWorker's thread,
-    so Windows never waits on us.
+    Windows removes low-level hooks whose thread does not answer quickly, so the hooks
+    get a thread that does nothing else: the callbacks classify, note the foreground
+    window, enqueue, and return. All other work happens on InputWorker's thread.
     """
 
     def __init__(self, events: queue.Queue):
         self.events = events
         self._keyboard_proc = HOOKPROC(self._on_key)
         self._mouse_proc = HOOKPROC(self._on_mouse)
-        self._hooks: list[int] = []
+        self._thread: threading.Thread | None = None
+        self._thread_id = 0
+        self._ready = threading.Event()
+        self._error: Exception | None = None
 
-    def install(self) -> None:
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._run, name="hooks", daemon=True)
+        self._thread.start()
+        self._ready.wait(timeout=5)
+        if self._error:
+            raise self._error
+
+    def stop(self) -> None:
+        if self._thread is not None:
+            user32.PostThreadMessageW(self._thread_id, WM_QUIT, 0, 0)
+            self._thread.join(timeout=3)
+            self._thread = None
+
+    def _run(self) -> None:
+        self._thread_id = kernel32.GetCurrentThreadId()
         module = kernel32.GetModuleHandleW(None)
-        for kind, proc in ((WH_KEYBOARD_LL, self._keyboard_proc), (WH_MOUSE_LL, self._mouse_proc)):
-            hook = user32.SetWindowsHookExW(kind, proc, module, 0)
-            if not hook:
-                raise ctypes.WinError(ctypes.get_last_error())
-            self._hooks.append(hook)
-
-    def uninstall(self) -> None:
-        while self._hooks:
-            user32.UnhookWindowsHookEx(self._hooks.pop())
+        hooks = []
+        try:
+            for kind, proc in (
+                (WH_KEYBOARD_LL, self._keyboard_proc),
+                (WH_MOUSE_LL, self._mouse_proc),
+            ):
+                hook = user32.SetWindowsHookExW(kind, proc, module, 0)
+                if not hook:
+                    raise ctypes.WinError(ctypes.get_last_error())
+                hooks.append(hook)
+        except Exception as exc:
+            self._error = exc
+            self._ready.set()
+            return
+        self._ready.set()
+        msg = wintypes.MSG()
+        try:
+            while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+                user32.TranslateMessage(ctypes.byref(msg))
+                user32.DispatchMessageW(ctypes.byref(msg))
+        finally:
+            for hook in hooks:
+                user32.UnhookWindowsHookEx(hook)
 
     def _on_key(self, code: int, wparam: int, lparam: int) -> int:
         if code == 0 and wparam in (WM_KEYDOWN, WM_SYSKEYDOWN):
@@ -166,7 +220,8 @@ class InputHooks:
                 vk = KBDLLHOOKSTRUCT.from_address(lparam).vkCode
                 kind = classify_key(vk, wparam == WM_SYSKEYDOWN)
                 if kind:
-                    self.events.put_nowait((kind, datetime.now(timezone.utc)))
+                    event = (kind, datetime.now(timezone.utc), user32.GetForegroundWindow())
+                    self.events.put_nowait(event)
             except Exception:
                 pass  # a hook must never fail
         return user32.CallNextHookEx(None, code, wparam, lparam)
@@ -175,7 +230,14 @@ class InputHooks:
         if code == 0 and wparam == WM_LBUTTONDOWN:
             try:
                 pt = MSLLHOOKSTRUCT.from_address(lparam).pt
-                self.events.put_nowait(("click", datetime.now(timezone.utc), pt.x, pt.y))
+                event = (
+                    "click",
+                    datetime.now(timezone.utc),
+                    user32.GetForegroundWindow(),
+                    pt.x,
+                    pt.y,
+                )
+                self.events.put_nowait(event)
             except Exception:
                 pass
         return user32.CallNextHookEx(None, code, wparam, lparam)
@@ -236,10 +298,14 @@ def is_password(control: auto.Control | None) -> bool:
 
 
 def browser_domain(hwnd: int) -> str:
-    """Host name shown in the address bar, or "" while the user is typing in it."""
+    """Host name shown in the address bar, or "" while the user is typing in it.
+
+    Only the Chrome/Edge omnibox (class OmniboxViewViews) is read, never an input box
+    on the page. If a browser update renames it, no domain is recorded (fails safe).
+    """
     try:
         window = auto.ControlFromHandle(hwnd)
-        bar = window.EditControl(searchDepth=12)
+        bar = window.EditControl(searchDepth=12, ClassName=OMNIBOX_CLASS)
         if not bar.Exists(0, 0) or bar.HasKeyboardFocus:
             return ""
         return sanitize.domain(bar.GetValuePattern().Value)
@@ -262,6 +328,7 @@ class InputWorker:
         self._focus_key: tuple | None = None
         self._in_password = False
         self._last_title: str | None = None
+        self._names: dict[int, str] = {}  # process id -> process name
 
     def start(self) -> None:
         if self._thread is None:
@@ -278,17 +345,37 @@ class InputWorker:
         with auto.UIAutomationInitializerInThread():
             next_poll = datetime.now(timezone.utc)
             while not self._stop.is_set():
-                try:
-                    self._drain(timeout=0.2)
-                    now = datetime.now(timezone.utc)
-                    if now >= next_poll:
-                        next_poll = now + timedelta(seconds=self.poll_interval)
-                        self._poll_focus_and_browser()
-                        self._poll_clipboard()
-                    self._flush_typing_if_quiet(now)
-                except Exception as exc:
-                    log.error("input worker cycle failed: %s", type(exc).__name__)
+                self._step("events", self._drain, 0.2)
+                now = datetime.now(timezone.utc)
+                if now >= next_poll:
+                    next_poll = now + timedelta(seconds=self.poll_interval)
+                    # separate steps: one failing never stops the others
+                    self._step("focus", self._poll_focus_and_browser)
+                    self._step("clipboard", self._poll_clipboard)
+                self._step("typing", self._flush_typing_if_quiet, now)
             self._flush_typing()
+
+    def _step(self, name: str, func, *args) -> None:
+        try:
+            func(*args)
+        except Exception as exc:  # only the type: messages could carry content
+            log.error("input %s failed: %s", name, type(exc).__name__)
+
+    def _app_of(self, hwnd: int) -> str:
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if not pid.value:
+            return ""
+        name = self._names.get(pid.value)
+        if name is None:
+            try:
+                name = psutil.Process(pid.value).name()
+            except psutil.Error:
+                name = ""
+            if len(self._names) > 500:
+                self._names.clear()
+            self._names[pid.value] = name
+        return name
 
     def _drain(self, timeout: float) -> None:
         try:
@@ -303,8 +390,8 @@ class InputWorker:
                 return
 
     def _handle(self, event: tuple) -> None:
-        kind, when = event[0], event[1]
-        app, _ = foreground_app()
+        kind, when, hwnd = event[0], event[1], event[2]
+        app = self._app_of(hwnd)  # the window that had the input when it happened
         if kind == "key":
             burst = self._burst
             if burst is None or burst["app"] != app:
@@ -314,11 +401,13 @@ class InputWorker:
             burst["last"] = when
             burst["password"] = burst.get("password", False) or self._in_password
         elif kind == "click":
-            self._on_click(when, event[2], event[3], app)
+            self._on_click(when, event[3], event[4], app)
         else:
             if kind == "ctrl+x":
                 self._last_cut = when
-            self.recorder.observe(OperationTypeObservation(when, kind, app_name=app))
+            self.recorder.observe(
+                OperationTypeObservation(when, kind, app_name=app, in_password=self._in_password)
+            )
 
     def _flush_typing_if_quiet(self, now: datetime) -> None:
         if self._burst and now - self._burst["last"] >= TYPING_PAUSE:
@@ -350,7 +439,7 @@ class InputWorker:
     def _poll_focus_and_browser(self) -> None:
         now = datetime.now(timezone.utc)
         app, title = foreground_app()
-        focused = auto.GetFocusedElement()
+        focused = auto.GetFocusedControl()
         if focused is not None:
             self._in_password = is_password(focused)
             meta = element_metadata(focused)

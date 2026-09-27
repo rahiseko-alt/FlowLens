@@ -2,7 +2,7 @@
 ; Installs per-user without administrative privileges into %LOCALAPPDATA%\Programs\FlowLens
 
 #define MyAppName "FlowLens"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.2.0"
 #define MyAppPublisher "FlowLens Team"
 #define MyAppExeName "flowlens.exe"
 
@@ -33,11 +33,17 @@ Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "FlowLens"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue
 
 [Run]
+; Restart FlowLens within 10 minutes if it was killed. The --watchdog start does nothing
+; when FlowLens is already running or the employee chose 終了 (until the next login).
+Filename: "{sys}\schtasks.exe"; Parameters: "/Create /F /SC MINUTE /MO 10 /TN ""FlowLens watchdog"" /TR ""\""{app}\{#MyAppExeName}\"" --watchdog"""; Flags: runhidden
 ; Start right after installation so the employee sees the consent screen.
 Filename: "{app}\{#MyAppExeName}"; Description: "FlowLens を起動する"; Flags: nowait postinstall
 
 [UninstallRun]
-; The collector must not be running while its files are removed.
+Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /F /TN ""FlowLens watchdog"""; Flags: runhidden; RunOnceId: "RemoveWatchdog"
+; Ask FlowLens to close (it saves the open session), then make sure it is gone.
+Filename: "{sys}\taskkill.exe"; Parameters: "/IM {#MyAppExeName}"; Flags: runhidden; RunOnceId: "CloseFlowLens"
+Filename: "{sys}\timeout.exe"; Parameters: "/T 3 /NOBREAK"; Flags: runhidden; RunOnceId: "WaitFlowLens"
 Filename: "{sys}\taskkill.exe"; Parameters: "/IM {#MyAppExeName} /F"; Flags: runhidden; RunOnceId: "StopFlowLens"
 
 [Code]

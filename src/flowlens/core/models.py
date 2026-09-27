@@ -72,6 +72,7 @@ class OperationTypeObservation(Observation):
 
     operation_type: str
     app_name: str | None = None
+    in_password: bool = False  # pressed while a password box had the focus
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,7 @@ class ClipboardObservation(Observation):
     data_type: str = "text"
     data_length: int = 0
     app_name: str | None = None
+    in_password: bool = False  # a paste into a password box
 
 
 @dataclass(frozen=True)

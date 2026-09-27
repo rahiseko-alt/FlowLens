@@ -71,6 +71,8 @@ def export(recorder: Recorder, tmp_path: Path):
     counter = iter(range(1000))
 
     def run(time_range: TimeRange | None = None, password: str = PASSWORD) -> Export:
+        # The session in progress is not exported; end it first, as closing the app would.
+        recorder.flush()
         rng = time_range or TimeRange(T0 - timedelta(days=60), T0 + timedelta(days=60))
         dest = tmp_path / "out" / f"export{next(counter)}.zip"
         recorder.export(rng, password, dest)

@@ -8,12 +8,26 @@ DEFAULT_RETENTION_DAYS = 30
 DEFAULT_IDLE_THRESHOLD_SECONDS = 300.0
 
 
+# Password managers are excluded from the start: copying a password from one would
+# otherwise leave at least its length in a Clipboard Transfer.
+DEFAULT_EXCLUDED_APPS = [
+    "1password.exe",
+    "bitwarden.exe",
+    "dashlane.exe",
+    "keepass.exe",
+    "keepassxc.exe",
+    "lastpass.exe",
+    "nordpass.exe",
+]
+
+
 def _defaults() -> dict[str, Any]:
     return {
-        "excluded_apps": [],
+        "excluded_apps": list(DEFAULT_EXCLUDED_APPS),
         "retention_days": DEFAULT_RETENTION_DAYS,
         "idle_threshold_seconds": DEFAULT_IDLE_THRESHOLD_SECONDS,
         "paused_since": None,
+        "user_exited": False,
         "enabled_past_sources": None,
     }
 
