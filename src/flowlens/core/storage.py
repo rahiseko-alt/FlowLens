@@ -23,8 +23,32 @@ CREATE TABLE IF NOT EXISTS app_sessions (
     source TEXT NOT NULL DEFAULT 'live'
 );
 
+CREATE TABLE IF NOT EXISTS typing_activities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    app_name TEXT NOT NULL,
+    window_title_hash TEXT NOT NULL,
+    start_time TEXT NOT NULL,
+    end_time TEXT NOT NULL,
+    duration_seconds REAL NOT NULL,
+    keystroke_count INTEGER NOT NULL,
+    is_password INTEGER NOT NULL DEFAULT 0,
+    is_past INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'live'
+);
+
+CREATE TABLE IF NOT EXISTS operation_types (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    app_name TEXT NOT NULL,
+    operation_type TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    is_past INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'live'
+);
+
 CREATE INDEX IF NOT EXISTS idx_app_sessions_time ON app_sessions(start_time, end_time);
 CREATE INDEX IF NOT EXISTS idx_app_sessions_app ON app_sessions(app_name);
+CREATE INDEX IF NOT EXISTS idx_typing_time ON typing_activities(start_time, end_time);
+CREATE INDEX IF NOT EXISTS idx_operation_time ON operation_types(timestamp);
 """
 
 
@@ -89,6 +113,71 @@ class Storage:
                     start_time.isoformat(),
                     end_time.isoformat(),
                     duration_seconds,
+                    is_past,
+                    source,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def insert_typing_activity(
+        self,
+        app_name: str,
+        window_title_hash: str,
+        start_time: datetime,
+        end_time: datetime,
+        duration_seconds: float,
+        keystroke_count: int,
+        is_password: int = 0,
+        is_past: int = 0,
+        source: str = "live",
+    ) -> None:
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO typing_activities (
+                    app_name, window_title_hash, start_time, end_time,
+                    duration_seconds, keystroke_count, is_password, is_past, source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    app_name,
+                    window_title_hash,
+                    start_time.isoformat(),
+                    end_time.isoformat(),
+                    duration_seconds,
+                    keystroke_count,
+                    is_password,
+                    is_past,
+                    source,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def insert_operation_type(
+        self,
+        app_name: str,
+        operation_type: str,
+        timestamp: datetime,
+        is_past: int = 0,
+        source: str = "live",
+    ) -> None:
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO operation_types (
+                    app_name, operation_type, timestamp, is_past, source
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    app_name,
+                    operation_type,
+                    timestamp.isoformat(),
                     is_past,
                     source,
                 ),
@@ -167,6 +256,58 @@ class Storage:
                         s["source"],
                     ),
                 )
+
+            # Export typing activities in time range
+            src_conn = self._connect()
+            try:
+                cur = src_conn.execute(
+                    "SELECT * FROM typing_activities WHERE end_time >= ? AND start_time <= ?",
+                    (start.isoformat(), end.isoformat()),
+                )
+                for t in cur.fetchall():
+                    conn.execute(
+                        """
+                        INSERT INTO typing_activities (
+                            app_name, window_title_hash, start_time, end_time,
+                            duration_seconds, keystroke_count, is_password, is_past, source
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            t["app_name"],
+                            t["window_title_hash"],
+                            t["start_time"],
+                            t["end_time"],
+                            t["duration_seconds"],
+                            t["keystroke_count"],
+                            t["is_password"],
+                            t["is_past"],
+                            t["source"],
+                        ),
+                    )
+
+                # Export operation types in time range
+                cur = src_conn.execute(
+                    "SELECT * FROM operation_types WHERE timestamp >= ? AND timestamp <= ?",
+                    (start.isoformat(), end.isoformat()),
+                )
+                for op in cur.fetchall():
+                    conn.execute(
+                        """
+                        INSERT INTO operation_types (
+                            app_name, operation_type, timestamp, is_past, source
+                        ) VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (
+                            op["app_name"],
+                            op["operation_type"],
+                            op["timestamp"],
+                            op["is_past"],
+                            op["source"],
+                        ),
+                    )
+            finally:
+                src_conn.close()
+
             conn.commit()
         finally:
             conn.close()

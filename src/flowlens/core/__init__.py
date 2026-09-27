@@ -5,9 +5,11 @@ from flowlens.core.models import (
     IdleObservation,
     LockObservation,
     Observation,
+    OperationTypeObservation,
     SessionDisconnectObservation,
     SleepObservation,
     TimeRange,
+    TypingObservation,
     WindowObservation,
 )
 from flowlens.core.recorder import Recorder
@@ -20,6 +22,8 @@ __all__ = [
     "LockObservation",
     "SleepObservation",
     "SessionDisconnectObservation",
+    "TypingObservation",
+    "OperationTypeObservation",
     "AppSession",
     "TimeRange",
 ]

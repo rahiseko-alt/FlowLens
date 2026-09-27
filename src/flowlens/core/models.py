@@ -58,6 +58,26 @@ class SessionDisconnectObservation(Observation):
 
 
 @dataclass(frozen=True)
+class TypingObservation(Observation):
+    """Observation of typing activity."""
+
+    keystrokes: int = 1
+    duration_seconds: float = 0.0
+    is_password: bool = False
+    raw_text: str = ""  # Input from Windows hook, discarded by core
+    app_name: str | None = None
+    window_title: str | None = None
+
+
+@dataclass(frozen=True)
+class OperationTypeObservation(Observation):
+    """Observation of operational key combination (copy, paste, enter, etc.)."""
+
+    operation_type: str
+    app_name: str | None = None
+
+
+@dataclass(frozen=True)
 class AppSession:
     """An app session representing uninterrupted active foreground usage."""
 

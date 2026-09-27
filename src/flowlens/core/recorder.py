@@ -11,9 +11,11 @@ from flowlens.core.models import (
     IdleObservation,
     LockObservation,
     Observation,
+    OperationTypeObservation,
     SessionDisconnectObservation,
     SleepObservation,
     TimeRange,
+    TypingObservation,
     WindowObservation,
 )
 from flowlens.core.storage import Storage
@@ -102,8 +104,50 @@ class Recorder:
             self._handle_sleep_observation(observation)
         elif isinstance(observation, SessionDisconnectObservation):
             self._handle_disconnect_observation(observation)
+        elif isinstance(observation, TypingObservation):
+            self._handle_typing_observation(observation)
+        elif isinstance(observation, OperationTypeObservation):
+            self._handle_operation_observation(observation)
         elif isinstance(observation, WindowObservation):
             self._handle_window_observation(observation)
+
+    def _handle_typing_observation(self, obs: TypingObservation) -> None:
+        if self.is_away:
+            return
+
+        app_name = obs.app_name or self._active_app or "Unknown"
+        title_hash = self._active_title_hash
+        start_time = obs.timestamp
+        duration = max(0.0, obs.duration_seconds)
+        end_time = obs.timestamp
+
+        # When in password field, keystroke count is 0 (duration only is preserved)
+        keystroke_count = 0 if obs.is_password else obs.keystrokes
+
+        self.storage.insert_typing_activity(
+            app_name=app_name,
+            window_title_hash=title_hash,
+            start_time=start_time,
+            end_time=end_time,
+            duration_seconds=duration,
+            keystroke_count=keystroke_count,
+            is_password=1 if obs.is_password else 0,
+            is_past=0,
+            source="live",
+        )
+
+    def _handle_operation_observation(self, obs: OperationTypeObservation) -> None:
+        if self.is_away:
+            return
+
+        app_name = obs.app_name or self._active_app or "Unknown"
+        self.storage.insert_operation_type(
+            app_name=app_name,
+            operation_type=obs.operation_type.lower(),
+            timestamp=obs.timestamp,
+            is_past=0,
+            source="live",
+        )
 
     def _handle_idle_observation(self, obs: IdleObservation) -> None:
         if obs.is_idle:
