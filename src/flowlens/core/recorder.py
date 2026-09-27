@@ -8,6 +8,7 @@ import pyzipper
 
 from flowlens.core.crypto import KeyManager
 from flowlens.core.models import (
+    ClipboardObservation,
     IdleObservation,
     LockObservation,
     Observation,
@@ -56,6 +57,8 @@ class Recorder:
         self._is_locked = False
         self._is_asleep = False
         self._is_disconnected = False
+
+        self._pending_copy: dict[str, Any] | None = None
 
     @property
     def is_paused(self) -> bool:
@@ -108,6 +111,8 @@ class Recorder:
             self._handle_typing_observation(observation)
         elif isinstance(observation, OperationTypeObservation):
             self._handle_operation_observation(observation)
+        elif isinstance(observation, ClipboardObservation):
+            self._handle_clipboard_observation(observation)
         elif isinstance(observation, WindowObservation):
             self._handle_window_observation(observation)
 
@@ -140,14 +145,65 @@ class Recorder:
         if self.is_away:
             return
 
+        op = obs.operation_type.lower()
         app_name = obs.app_name or self._active_app or "Unknown"
+
         self.storage.insert_operation_type(
             app_name=app_name,
-            operation_type=obs.operation_type.lower(),
+            operation_type=op,
             timestamp=obs.timestamp,
             is_past=0,
             source="live",
         )
+
+        # If ctrl+v and there is a pending copy, infer paste and complete clipboard transfer
+        if op == "ctrl+v" and self._pending_copy:
+            self._complete_clipboard_transfer(
+                target_app=app_name,
+                paste_time=obs.timestamp,
+            )
+
+    def _handle_clipboard_observation(self, obs: ClipboardObservation) -> None:
+        if self.is_away:
+            return
+
+        action = obs.action.lower()
+        app_name = obs.app_name or self._active_app or "Unknown"
+
+        if action in ("copy", "cut"):
+            # If there was a previous unpasted copy, commit it with empty target_app
+            if self._pending_copy:
+                self._complete_clipboard_transfer(target_app="", paste_time=None)
+
+            self._pending_copy = {
+                "source_app": app_name,
+                "data_type": obs.data_type,
+                "data_length": obs.data_length,
+                "copy_time": obs.timestamp,
+            }
+        elif action == "paste":
+            if self._pending_copy:
+                self._complete_clipboard_transfer(
+                    target_app=app_name,
+                    paste_time=obs.timestamp,
+                )
+
+    def _complete_clipboard_transfer(
+        self, target_app: str, paste_time: datetime | None
+    ) -> None:
+        if not self._pending_copy:
+            return
+        self.storage.insert_clipboard_transfer(
+            source_app=self._pending_copy["source_app"],
+            target_app=target_app,
+            data_type=self._pending_copy["data_type"],
+            data_length=self._pending_copy["data_length"],
+            copy_time=self._pending_copy["copy_time"],
+            paste_time=paste_time,
+            is_past=0,
+            source="live",
+        )
+        self._pending_copy = None
 
     def _handle_idle_observation(self, obs: IdleObservation) -> None:
         if obs.is_idle:
@@ -249,6 +305,9 @@ class Recorder:
                 self._active_start = None
                 self._active_end = None
                 self._active_app = None
+
+        if self._pending_copy is not None:
+            self._complete_clipboard_transfer(target_app="", paste_time=None)
 
     def delete(self, time_range: TimeRange) -> None:
         """Deletes records within the specified time range."""

@@ -2,6 +2,7 @@
 
 from flowlens.core.models import (
     AppSession,
+    ClipboardObservation,
     IdleObservation,
     LockObservation,
     Observation,
@@ -24,6 +25,7 @@ __all__ = [
     "SessionDisconnectObservation",
     "TypingObservation",
     "OperationTypeObservation",
+    "ClipboardObservation",
     "AppSession",
     "TimeRange",
 ]

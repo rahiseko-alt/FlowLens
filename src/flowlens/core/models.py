@@ -78,6 +78,17 @@ class OperationTypeObservation(Observation):
 
 
 @dataclass(frozen=True)
+class ClipboardObservation(Observation):
+    """Observation of clipboard operations (copy, cut, paste)."""
+
+    action: str  # "copy", "cut", "paste"
+    data_type: str = "text"
+    data_length: int = 0
+    raw_content: str = ""  # Input from hook, discarded by core
+    app_name: str | None = None
+
+
+@dataclass(frozen=True)
 class AppSession:
     """An app session representing uninterrupted active foreground usage."""
 

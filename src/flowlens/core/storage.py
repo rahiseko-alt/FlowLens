@@ -45,10 +45,23 @@ CREATE TABLE IF NOT EXISTS operation_types (
     source TEXT NOT NULL DEFAULT 'live'
 );
 
+CREATE TABLE IF NOT EXISTS clipboard_transfers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_app TEXT NOT NULL,
+    target_app TEXT NOT NULL DEFAULT '',
+    data_type TEXT NOT NULL DEFAULT 'text',
+    data_length INTEGER NOT NULL DEFAULT 0,
+    copy_time TEXT NOT NULL,
+    paste_time TEXT,
+    is_past INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'live'
+);
+
 CREATE INDEX IF NOT EXISTS idx_app_sessions_time ON app_sessions(start_time, end_time);
 CREATE INDEX IF NOT EXISTS idx_app_sessions_app ON app_sessions(app_name);
 CREATE INDEX IF NOT EXISTS idx_typing_time ON typing_activities(start_time, end_time);
 CREATE INDEX IF NOT EXISTS idx_operation_time ON operation_types(timestamp);
+CREATE INDEX IF NOT EXISTS idx_clipboard_time ON clipboard_transfers(copy_time);
 """
 
 
@@ -186,6 +199,41 @@ class Storage:
         finally:
             conn.close()
 
+    def insert_clipboard_transfer(
+        self,
+        source_app: str,
+        target_app: str,
+        data_type: str,
+        data_length: int,
+        copy_time: datetime,
+        paste_time: datetime | None = None,
+        is_past: int = 0,
+        source: str = "live",
+    ) -> None:
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO clipboard_transfers (
+                    source_app, target_app, data_type, data_length,
+                    copy_time, paste_time, is_past, source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    source_app,
+                    target_app,
+                    data_type,
+                    data_length,
+                    copy_time.isoformat(),
+                    paste_time.isoformat() if paste_time else None,
+                    is_past,
+                    source,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     def get_app_sessions(
         self, start: datetime | None = None, end: datetime | None = None
     ) -> list[dict[str, Any]]:
@@ -303,6 +351,31 @@ class Storage:
                             op["timestamp"],
                             op["is_past"],
                             op["source"],
+                        ),
+                    )
+
+                # Export clipboard transfers in time range
+                cur = src_conn.execute(
+                    "SELECT * FROM clipboard_transfers WHERE copy_time >= ? AND copy_time <= ?",
+                    (start.isoformat(), end.isoformat()),
+                )
+                for cb in cur.fetchall():
+                    conn.execute(
+                        """
+                        INSERT INTO clipboard_transfers (
+                            source_app, target_app, data_type, data_length,
+                            copy_time, paste_time, is_past, source
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            cb["source_app"],
+                            cb["target_app"],
+                            cb["data_type"],
+                            cb["data_length"],
+                            cb["copy_time"],
+                            cb["paste_time"],
+                            cb["is_past"],
+                            cb["source"],
                         ),
                     )
             finally:
