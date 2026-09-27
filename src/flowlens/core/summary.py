@@ -1,85 +1,71 @@
+"""summary.json: totals computed with SQL only (no AI), live and past kept apart."""
+
+from __future__ import annotations
+
 import sqlite3
 from pathlib import Path
 from typing import Any
 
 
 def generate_summary(db_path: str | Path) -> dict[str, Any]:
-    """Generates summary statistics (app durations, session counts, transfers)
-
-    separated by live and past records directly from the exported SQLite database.
-    """
     conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
     try:
-        cur = conn.cursor()
 
-        # Total active seconds across all app sessions
-        cur.execute("SELECT COALESCE(SUM(duration_seconds), 0.0) FROM app_sessions")
-        total_active_seconds = float(cur.fetchone()[0])
+        def pairs(sql: str) -> dict[str, Any]:
+            return {row[0]: row[1] for row in conn.execute(sql)}
 
-        live_apps: dict[str, dict[str, Any]] = {}
-        past_apps: dict[str, dict[str, Any]] = {}
-        live_total_seconds = 0.0
-        past_total_seconds = 0.0
-
-        # Query session statistics grouped by app and is_past
-        cur.execute(
-            """
-            SELECT app_name, is_past, SUM(duration_seconds) as total_dur, COUNT(*) as cnt
-            FROM app_sessions
-            GROUP BY app_name, is_past
-            ORDER BY total_dur DESC
-            """
-        )
-        for row in cur.fetchall():
-            app = row["app_name"]
-            is_past = row["is_past"]
-            dur = float(row["total_dur"])
-            cnt = int(row["cnt"])
-            info = {
-                "duration_seconds": dur,
-                "session_count": cnt,
-            }
-            if is_past == 1:
-                past_apps[app] = info
-                past_total_seconds += dur
-            else:
-                live_apps[app] = info
-                live_total_seconds += dur
-
-        live_transfers: dict[str, int] = {}
-        past_transfers: dict[str, int] = {}
-
-        # Query clipboard transfers grouped by source->target and is_past
-        cur.execute(
-            """
-            SELECT source_app, target_app, is_past, COUNT(*) as cnt
-            FROM clipboard_transfers
-            WHERE source_app IS NOT NULL AND source_app != ''
-              AND target_app IS NOT NULL AND target_app != ''
-            GROUP BY source_app, target_app, is_past
-            ORDER BY cnt DESC
-            """
-        )
-        for row in cur.fetchall():
-            key = f"{row['source_app']}->{row['target_app']}"
-            cnt = int(row["cnt"])
-            if row["is_past"] == 1:
-                past_transfers[key] = cnt
-            else:
-                live_transfers[key] = cnt
-
+        live_apps = {
+            app: {"duration_seconds": dur, "session_count": cnt}
+            for app, dur, cnt in conn.execute(
+                "SELECT app_name, SUM(duration_seconds), COUNT(*) FROM app_sessions "
+                "WHERE is_past = 0 GROUP BY app_name ORDER BY SUM(duration_seconds) DESC"
+            )
+        }
+        past_apps = {
+            app: {"run_count": runs, "focus_seconds": focus, "last_used": last}
+            for app, runs, focus, last in conn.execute(
+                "SELECT app_name, SUM(run_count), SUM(focus_seconds), MAX(last_used) "
+                "FROM past_app_stats GROUP BY app_name ORDER BY SUM(focus_seconds) DESC"
+            )
+        }
         return {
-            "total_active_seconds": total_active_seconds,
             "live": {
-                "total_seconds": live_total_seconds,
+                "total_seconds": sum(a["duration_seconds"] for a in live_apps.values()),
                 "apps": live_apps,
-                "transfers": live_transfers,
+                "clipboard_transfers": pairs(
+                    "SELECT source_app || '->' || target_app, COUNT(*) FROM clipboard_transfers "
+                    "WHERE target_app != '' GROUP BY 1 ORDER BY 2 DESC"
+                ),
+                "keystrokes_by_app": pairs(
+                    "SELECT app_name, SUM(keystroke_count) FROM typing_activities "
+                    "GROUP BY app_name ORDER BY 2 DESC"
+                ),
+                "operations": pairs(
+                    "SELECT operation_type, COUNT(*) FROM operation_events "
+                    "GROUP BY 1 ORDER BY 2 DESC"
+                ),
+                "excluded_seconds": pairs(
+                    "SELECT reason, SUM(duration_seconds) FROM excluded_intervals GROUP BY reason"
+                ),
             },
             "past": {
-                "total_seconds": past_total_seconds,
-                "apps": past_apps,
-                "transfers": past_transfers,
+                "app_usage_counters": past_apps,
+                "system_events": pairs(
+                    "SELECT event_type, COUNT(*) FROM system_events GROUP BY 1 ORDER BY 2 DESC"
+                ),
+                "file_opens_by_extension": pairs(
+                    "SELECT file_ext, COUNT(*) FROM file_events GROUP BY 1 ORDER BY 2 DESC"
+                ),
+                "top_domains": pairs(
+                    "SELECT domain, COUNT(*) FROM browser_events "
+                    "GROUP BY 1 ORDER BY 2 DESC LIMIT 50"
+                ),
+                "sources": {
+                    src: {"status": status, "record_count": cnt}
+                    for src, status, cnt in conn.execute(
+                        "SELECT source, status, record_count FROM past_import_runs ORDER BY run_at"
+                    )
+                },
             },
         }
     finally:

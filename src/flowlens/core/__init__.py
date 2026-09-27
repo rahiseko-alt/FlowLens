@@ -1,14 +1,13 @@
-"""FlowLens Core package."""
+"""FlowLens Collector core: everything that decides what is stored and exported."""
 
 from flowlens.core.models import (
-    AppSession,
     ClipboardObservation,
     ControlMetadataObservation,
     IdleObservation,
     LockObservation,
     Observation,
     OperationTypeObservation,
-    PastAppUsageObservation,
+    PastAppStatsObservation,
     PastBrowserObservation,
     PastFileObservation,
     PastSystemEventObservation,
@@ -32,10 +31,9 @@ __all__ = [
     "OperationTypeObservation",
     "ClipboardObservation",
     "ControlMetadataObservation",
-    "PastAppUsageObservation",
+    "PastAppStatsObservation",
     "PastSystemEventObservation",
     "PastFileObservation",
     "PastBrowserObservation",
-    "AppSession",
     "TimeRange",
 ]
