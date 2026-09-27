@@ -586,3 +586,91 @@ class Storage:
             "redacted_control_events": redacted_control,
             "total_redacted_records": total_redacted,
         }
+
+    def delete_range(
+        self,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> None:
+        """Deletes records across all tables within the given time range,
+
+        then reclaims database disk space via VACUUM.
+        """
+        conn = self._connect()
+        try:
+            if start is None and end is None:
+                conn.execute("DELETE FROM app_sessions")
+                conn.execute("DELETE FROM typing_activities")
+                conn.execute("DELETE FROM operation_types")
+                conn.execute("DELETE FROM clipboard_transfers")
+                conn.execute("DELETE FROM control_events")
+                conn.execute("DELETE FROM excluded_intervals")
+            else:
+                s_iso = start.isoformat() if start else "-9999-01-01"
+                e_iso = end.isoformat() if end else "9999-12-31"
+
+                conn.execute(
+                    "DELETE FROM app_sessions WHERE end_time >= ? AND start_time <= ?",
+                    (s_iso, e_iso),
+                )
+                conn.execute(
+                    "DELETE FROM typing_activities WHERE end_time >= ? AND start_time <= ?",
+                    (s_iso, e_iso),
+                )
+                conn.execute(
+                    "DELETE FROM operation_types WHERE timestamp >= ? AND timestamp <= ?",
+                    (s_iso, e_iso),
+                )
+                conn.execute(
+                    "DELETE FROM clipboard_transfers WHERE copy_time >= ? AND copy_time <= ?",
+                    (s_iso, e_iso),
+                )
+                conn.execute(
+                    "DELETE FROM control_events WHERE timestamp >= ? AND timestamp <= ?",
+                    (s_iso, e_iso),
+                )
+                conn.execute(
+                    "DELETE FROM excluded_intervals WHERE end_time >= ? AND start_time <= ?",
+                    (s_iso, e_iso),
+                )
+            conn.commit()
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        finally:
+            conn.close()
+
+        # Reclaim disk space via VACUUM
+        try:
+            vacuum_conn = sqlite3.connect(str(self.db_path), isolation_level=None)
+            try:
+                vacuum_conn.execute("VACUUM")
+                vacuum_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            finally:
+                vacuum_conn.close()
+        except sqlite3.OperationalError:
+            pass
+
+    def delete_before(self, cutoff: datetime) -> None:
+        """Deletes records older than cutoff across all tables."""
+        c_iso = cutoff.isoformat()
+        conn = self._connect()
+        try:
+            conn.execute("DELETE FROM app_sessions WHERE end_time < ?", (c_iso,))
+            conn.execute("DELETE FROM typing_activities WHERE end_time < ?", (c_iso,))
+            conn.execute("DELETE FROM operation_types WHERE timestamp < ?", (c_iso,))
+            conn.execute("DELETE FROM clipboard_transfers WHERE copy_time < ?", (c_iso,))
+            conn.execute("DELETE FROM control_events WHERE timestamp < ?", (c_iso,))
+            conn.execute("DELETE FROM excluded_intervals WHERE end_time < ?", (c_iso,))
+            conn.commit()
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        finally:
+            conn.close()
+
+        try:
+            vacuum_conn = sqlite3.connect(str(self.db_path), isolation_level=None)
+            try:
+                vacuum_conn.execute("VACUUM")
+                vacuum_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            finally:
+                vacuum_conn.close()
+        except sqlite3.OperationalError:
+            pass

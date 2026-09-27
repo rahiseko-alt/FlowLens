@@ -1,6 +1,6 @@
 import json
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -107,8 +107,20 @@ class Recorder:
     def set_excluded_apps(self, apps: list[str]) -> None:
         self._excluded_apps = {app.lower().strip() for app in apps}
 
-    def set_retention_days(self, days: int) -> None:
-        self._retention_days = days
+    def set_retention_days(self, days: int | None) -> None:
+        if days is None or days <= 0:
+            self._retention_days = None
+        else:
+            self._retention_days = int(days)
+
+    def apply_retention_policy(self) -> None:
+        """Deletes records exceeding retention period.
+
+        If retention is None, records are kept indefinitely.
+        """
+        if self._retention_days is not None and self._retention_days > 0:
+            cutoff = self.clock() - timedelta(days=self._retention_days)
+            self.storage.delete_before(cutoff)
 
     def observe(self, observation: Observation) -> None:
         """Receive an observation from observation sources."""
@@ -382,17 +394,35 @@ class Recorder:
         if self._pending_copy is not None:
             self._complete_clipboard_transfer(target_app="", paste_time=None)
 
-    def delete(self, time_range: TimeRange) -> None:
-        """Deletes records within the specified time range."""
+    def delete(self, target: TimeRange | str) -> None:
+        """Deletes records within the specified time range or scope string.
+
+        Supported scopes: 'today', 'last_7_days', 'last_30_days', 'all'.
+        """
         self.flush()
-        # Will be extended for full deletion features in #13
-        query = "DELETE FROM app_sessions WHERE start_time >= ? AND end_time <= ?"
-        conn = self.storage._connect()
-        try:
-            conn.execute(query, (time_range.start.isoformat(), time_range.end.isoformat()))
-            conn.commit()
-        finally:
-            conn.close()
+
+        if isinstance(target, str):
+            scope = target.lower().strip()
+            now = self.clock()
+            if scope == "all":
+                self.storage.delete_range(None, None)
+            elif scope == "today":
+                today_start = datetime(
+                    now.year, now.month, now.day, tzinfo=now.tzinfo or timezone.utc
+                )
+                self.storage.delete_range(today_start, None)
+            elif scope == "last_7_days":
+                start = now - timedelta(days=7)
+                self.storage.delete_range(start, None)
+            elif scope == "last_30_days":
+                start = now - timedelta(days=30)
+                self.storage.delete_range(start, None)
+            else:
+                raise ValueError(f"Unknown deletion scope: {target}")
+        elif isinstance(target, TimeRange):
+            self.storage.delete_range(target.start, target.end)
+        else:
+            raise TypeError(f"Expected TimeRange or str, got {type(target)}")
 
     def export(
         self,
