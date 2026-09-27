@@ -16,10 +16,12 @@
 - クライアント PC では AI を一切動かさない（ADR 0001）。最小データ原則: 業務フローの発見に要らないデータは保存しない（ADR 0002）
 - DeskMate 流用調査の結果と5分類は `docs/research/deskmate-survey.md` にある。記録の本体（daemon）とデータベースは書き直し、監視の部品を選んで流用する方針
 - 目的・一言説明・利用の流れを `docs/product-overview.md` に確定した。インストールは社員本人、渡し方は製品で決めない（手元に1ファイル保存まで）、コンサルタントは基本本人だが他者もありうる
+- 価値、実装してはいけない機能、MVP のゴール（一言）と柱10本を `docs/product-overview.md` に確定した。暗号化（AES-256）は MVP に含める。コンサルタントの PC には 7-Zip が必要
 - 下書きの提出物: https://github.com/rahiseko-alt/FlowLens/pull/1
 
 **次にやること**
 
+- MVP の柱10本から、作る項目を割り出す（利用者と合意済みの次の作業）
 - 利用者の元の仕様書にある `IMPLEMENTATION_PLAN.md` を、調査結果と ADR をもとに作る（利用者の指示を待ってから）
 - そのあと `/to-spec` → `/to-tickets` → `/implement` と進む
 - `README.md` の冒頭を FlowLens の説明に書き換える
