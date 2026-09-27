@@ -154,8 +154,8 @@ class Recorder:
             self._active_end = timestamp
             return
 
-        # Check if switched app
-        if app_name != self._active_app:
+        # Check if switched app or window title
+        if app_name != self._active_app or title_hash != self._active_title_hash:
             # If gap between last observation of active app and new observation is > 1 hour,
             # previous session ended at its last observation time.
             if self._active_end and (timestamp - self._active_end).total_seconds() > 3600:
@@ -168,7 +168,7 @@ class Recorder:
             self._active_start = timestamp
             self._active_end = timestamp
         else:
-            # Same app
+            # Same app and same window
             self._active_end = timestamp
 
     def _commit_active_session(self, end_time: datetime | None = None) -> None:
