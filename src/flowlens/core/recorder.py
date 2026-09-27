@@ -14,6 +14,10 @@ from flowlens.core.models import (
     LockObservation,
     Observation,
     OperationTypeObservation,
+    PastAppUsageObservation,
+    PastBrowserObservation,
+    PastFileObservation,
+    PastSystemEventObservation,
     SessionDisconnectObservation,
     SleepObservation,
     TimeRange,
@@ -54,6 +58,7 @@ class Recorder:
         self._is_paused = False
         self._pause_start: datetime | None = None
         self._excluded_apps: set[str] = set()
+        self._enabled_past_sources: set[str] | None = None
         self._retention_days: int = 30
         self._idle_threshold_seconds: float = 300.0
 
@@ -122,6 +127,110 @@ class Recorder:
         if self._retention_days is not None and self._retention_days > 0:
             cutoff = self.clock() - timedelta(days=self._retention_days)
             self.storage.delete_before(cutoff)
+
+    def set_enabled_past_sources(self, sources: list[str] | set[str] | None) -> None:
+        """Configures which past import sources are allowed to be ingested.
+
+        None means all sources are enabled.
+        """
+        if sources is None:
+            self._enabled_past_sources = None
+        else:
+            self._enabled_past_sources = {s.lower().strip() for s in sources}
+
+    def is_past_source_enabled(self, source: str) -> bool:
+        """Returns True if the given past import source is enabled."""
+        if self._enabled_past_sources is None:
+            return True
+        return source.lower().strip() in self._enabled_past_sources
+
+    def import_past_records(self, source: str, records: list[Any]) -> dict[str, Any]:
+        """Imports a list of past records for a specific source, applying privacy sanitization,
+
+        30-day cutoff, app exclusion, and de-duplication.
+        """
+        if not self.is_past_source_enabled(source):
+            return {"status": "skipped", "count": 0, "error": None}
+
+        cutoff = self.clock() - timedelta(days=30)
+        inserted_count = 0
+
+        for record in records:
+            ts = getattr(record, "timestamp", None) or getattr(record, "start_time", None)
+            if ts is not None and ts < cutoff:
+                continue
+
+            if isinstance(record, PastAppUsageObservation):
+                if record.app_name.lower() in self._excluded_apps:
+                    continue
+                title_hash, title_ext = self.key_manager.hash_title(record.window_title)
+                if self.storage.insert_app_session(
+                    app_name=record.app_name,
+                    window_title_hash=title_hash,
+                    window_title_ext=title_ext,
+                    start_time=record.start_time,
+                    end_time=record.end_time,
+                    duration_seconds=record.duration_seconds,
+                    is_past=1,
+                    source=record.source or source,
+                ):
+                    inserted_count += 1
+
+            elif isinstance(record, PastSystemEventObservation):
+                if self.storage.insert_system_event(
+                    event_type=record.event_type,
+                    timestamp=record.timestamp,
+                    is_past=1,
+                    source=record.source or source,
+                ):
+                    inserted_count += 1
+
+            elif isinstance(record, PastFileObservation):
+                if record.app_name and record.app_name.lower() in self._excluded_apps:
+                    continue
+                file_name = Path(record.file_path).name
+                file_hash, file_ext = self.key_manager.hash_title(file_name)
+                if self.storage.insert_file_event(
+                    app_name=record.app_name,
+                    file_hash=file_hash,
+                    file_ext=file_ext,
+                    timestamp=record.timestamp,
+                    is_past=1,
+                    source=record.source or source,
+                ):
+                    inserted_count += 1
+
+            elif isinstance(record, PastBrowserObservation):
+                domain = extract_browser_domain(record.url)
+                if self.storage.insert_browser_event(
+                    browser_domain=domain,
+                    timestamp=record.timestamp,
+                    is_past=1,
+                    source=record.source or source,
+                ):
+                    inserted_count += 1
+
+        return {"status": "success", "count": inserted_count, "error": None}
+
+    def import_past_providers(
+        self, providers: dict[str, Callable[[], list[Any]]]
+    ) -> dict[str, dict[str, Any]]:
+        """Imports records from multiple source providers.
+
+        Failure in one provider does not interrupt other providers.
+        """
+        report: dict[str, dict[str, Any]] = {}
+        for source, provider in providers.items():
+            if not self.is_past_source_enabled(source):
+                report[source] = {"status": "skipped", "count": 0, "error": None}
+                continue
+            try:
+                records = provider()
+                res = self.import_past_records(source, records)
+                report[source] = res
+            except Exception as e:
+                report[source] = {"status": "failed", "count": 0, "error": str(e)}
+        return report
 
     def observe(self, observation: Observation) -> None:
         """Receive an observation from observation sources."""

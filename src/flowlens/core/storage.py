@@ -81,6 +81,45 @@ CREATE TABLE IF NOT EXISTS excluded_intervals (
     reason TEXT NOT NULL DEFAULT 'excluded_app'
 );
 
+CREATE TABLE IF NOT EXISTS system_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    is_past INTEGER NOT NULL DEFAULT 1,
+    source TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS file_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    app_name TEXT NOT NULL DEFAULT '',
+    file_hash TEXT NOT NULL,
+    file_ext TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    is_past INTEGER NOT NULL DEFAULT 1,
+    source TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS browser_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    browser_domain TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    is_past INTEGER NOT NULL DEFAULT 1,
+    source TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_sessions_unique ON app_sessions(
+    app_name, window_title_hash, start_time, end_time, is_past, source
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_file_events_unique ON file_events(
+    file_hash, timestamp, source
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_browser_events_unique ON browser_events(
+    browser_domain, timestamp, source
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_system_events_unique ON system_events(
+    event_type, timestamp, source
+);
+
 CREATE INDEX IF NOT EXISTS idx_app_sessions_time ON app_sessions(start_time, end_time);
 CREATE INDEX IF NOT EXISTS idx_app_sessions_app ON app_sessions(app_name);
 CREATE INDEX IF NOT EXISTS idx_typing_time ON typing_activities(start_time, end_time);
@@ -88,6 +127,9 @@ CREATE INDEX IF NOT EXISTS idx_operation_time ON operation_types(timestamp);
 CREATE INDEX IF NOT EXISTS idx_clipboard_time ON clipboard_transfers(copy_time);
 CREATE INDEX IF NOT EXISTS idx_control_time ON control_events(timestamp);
 CREATE INDEX IF NOT EXISTS idx_excluded_time ON excluded_intervals(start_time, end_time);
+CREATE INDEX IF NOT EXISTS idx_file_time ON file_events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_browser_time ON browser_events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_system_time ON system_events(timestamp);
 """
 
 
@@ -133,14 +175,14 @@ class Storage:
         duration_seconds: float,
         is_past: int = 0,
         source: str = "live",
-    ) -> None:
+    ) -> bool:
         if duration_seconds <= 0:
-            return
+            return False
         conn = self._connect()
         try:
-            conn.execute(
+            cur = conn.execute(
                 """
-                INSERT INTO app_sessions (
+                INSERT OR IGNORE INTO app_sessions (
                     app_name, window_title_hash, window_title_ext,
                     start_time, end_time, duration_seconds, is_past, source
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -157,6 +199,7 @@ class Storage:
                 ),
             )
             conn.commit()
+            return cur.rowcount > 0
         finally:
             conn.close()
 
@@ -329,6 +372,74 @@ class Storage:
                 ),
             )
             conn.commit()
+        finally:
+            conn.close()
+
+    def insert_system_event(
+        self,
+        event_type: str,
+        timestamp: datetime,
+        is_past: int = 1,
+        source: str = "event_log",
+    ) -> bool:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                INSERT OR IGNORE INTO system_events (
+                    event_type, timestamp, is_past, source
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (event_type, timestamp.isoformat(), is_past, source),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
+    def insert_file_event(
+        self,
+        file_hash: str,
+        file_ext: str,
+        timestamp: datetime,
+        app_name: str = "",
+        is_past: int = 1,
+        source: str = "recent_files",
+    ) -> bool:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                INSERT OR IGNORE INTO file_events (
+                    app_name, file_hash, file_ext, timestamp, is_past, source
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (app_name, file_hash, file_ext, timestamp.isoformat(), is_past, source),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
+    def insert_browser_event(
+        self,
+        browser_domain: str,
+        timestamp: datetime,
+        is_past: int = 1,
+        source: str = "chrome_history",
+    ) -> bool:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                INSERT OR IGNORE INTO browser_events (
+                    browser_domain, timestamp, is_past, source
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (browser_domain, timestamp.isoformat(), is_past, source),
+            )
+            conn.commit()
+            return cur.rowcount > 0
         finally:
             conn.close()
 
@@ -563,6 +674,59 @@ class Storage:
                         """,
                         (ex["start_time"], ex["end_time"], ex["duration_seconds"], ex["reason"]),
                     )
+
+                # Export system events
+                cur = src_conn.execute(
+                    "SELECT * FROM system_events WHERE timestamp >= ? AND timestamp <= ?",
+                    (start.isoformat(), end.isoformat()),
+                )
+                for se in cur.fetchall():
+                    conn.execute(
+                        """
+                        INSERT INTO system_events (event_type, timestamp, is_past, source)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (se["event_type"], se["timestamp"], se["is_past"], se["source"]),
+                    )
+
+                # Export file events
+                cur = src_conn.execute(
+                    "SELECT * FROM file_events WHERE timestamp >= ? AND timestamp <= ?",
+                    (start.isoformat(), end.isoformat()),
+                )
+                for fe in cur.fetchall():
+                    if fe["app_name"] and fe["app_name"].lower() in ex_apps:
+                        pass
+                    else:
+                        conn.execute(
+                            """
+                            INSERT INTO file_events (
+                                app_name, file_hash, file_ext, timestamp, is_past, source
+                            ) VALUES (?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                fe["app_name"],
+                                fe["file_hash"],
+                                fe["file_ext"],
+                                fe["timestamp"],
+                                fe["is_past"],
+                                fe["source"],
+                            ),
+                        )
+
+                # Export browser events
+                cur = src_conn.execute(
+                    "SELECT * FROM browser_events WHERE timestamp >= ? AND timestamp <= ?",
+                    (start.isoformat(), end.isoformat()),
+                )
+                for be in cur.fetchall():
+                    conn.execute(
+                        """
+                        INSERT INTO browser_events (browser_domain, timestamp, is_past, source)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (be["browser_domain"], be["timestamp"], be["is_past"], be["source"]),
+                    )
             finally:
                 src_conn.close()
 
@@ -605,6 +769,9 @@ class Storage:
                 conn.execute("DELETE FROM clipboard_transfers")
                 conn.execute("DELETE FROM control_events")
                 conn.execute("DELETE FROM excluded_intervals")
+                conn.execute("DELETE FROM system_events")
+                conn.execute("DELETE FROM file_events")
+                conn.execute("DELETE FROM browser_events")
             else:
                 s_iso = start.isoformat() if start else "-9999-01-01"
                 e_iso = end.isoformat() if end else "9999-12-31"
@@ -631,6 +798,18 @@ class Storage:
                 )
                 conn.execute(
                     "DELETE FROM excluded_intervals WHERE end_time >= ? AND start_time <= ?",
+                    (s_iso, e_iso),
+                )
+                conn.execute(
+                    "DELETE FROM system_events WHERE timestamp >= ? AND timestamp <= ?",
+                    (s_iso, e_iso),
+                )
+                conn.execute(
+                    "DELETE FROM file_events WHERE timestamp >= ? AND timestamp <= ?",
+                    (s_iso, e_iso),
+                )
+                conn.execute(
+                    "DELETE FROM browser_events WHERE timestamp >= ? AND timestamp <= ?",
                     (s_iso, e_iso),
                 )
             conn.commit()
@@ -660,6 +839,9 @@ class Storage:
             conn.execute("DELETE FROM clipboard_transfers WHERE copy_time < ?", (c_iso,))
             conn.execute("DELETE FROM control_events WHERE timestamp < ?", (c_iso,))
             conn.execute("DELETE FROM excluded_intervals WHERE end_time < ?", (c_iso,))
+            conn.execute("DELETE FROM system_events WHERE timestamp < ?", (c_iso,))
+            conn.execute("DELETE FROM file_events WHERE timestamp < ?", (c_iso,))
+            conn.execute("DELETE FROM browser_events WHERE timestamp < ?", (c_iso,))
             conn.commit()
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         finally:

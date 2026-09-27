@@ -117,3 +117,44 @@ class AppSession:
     duration_seconds: float
     is_past: int = 0
     source: str = "live"
+
+
+@dataclass(frozen=True)
+class PastAppUsageObservation:
+    """Past foreground app usage from sources like SRUM or UserAssist."""
+
+    app_name: str
+    start_time: datetime
+    end_time: datetime
+    duration_seconds: float
+    window_title: str = ""
+    source: str = "srum"
+
+
+@dataclass(frozen=True)
+class PastSystemEventObservation:
+    """Past power or system lifecycle event (boot, shutdown, sleep, resume, logon, lock)."""
+
+    event_type: str
+    timestamp: datetime
+    source: str = "event_log"
+
+
+@dataclass(frozen=True)
+class PastFileObservation:
+    """Past file interaction from Recent files or Jump lists."""
+
+    file_path: str
+    timestamp: datetime
+    app_name: str = ""
+    source: str = "recent_files"
+
+
+@dataclass(frozen=True)
+class PastBrowserObservation:
+    """Past browser navigation history from Chrome, Edge, etc."""
+
+    url: str
+    timestamp: datetime
+    source: str = "chrome_history"
+
