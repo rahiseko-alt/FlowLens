@@ -142,6 +142,28 @@ class CollectorApp:
         self.recorder.flush()
 
 
+def self_check() -> int:
+    """`flowlens.exe --self-check`: used by the build to prove the packaged app starts.
+
+    Loads every part and records into a throw-away folder, without showing any window.
+    """
+    import tempfile
+    from datetime import datetime, timezone
+
+    import uiautomation  # noqa: F401  (packaging: DLLs present)
+
+    from flowlens.core import WindowObservation
+
+    with tempfile.TemporaryDirectory() as tmp:
+        recorder = Recorder(Path(tmp))
+        recorder.observe(WindowObservation(datetime.now(timezone.utc), "flowlens.exe"))
+        recorder.flush()
+        recorder.storage.close()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
+    if "--self-check" in args:
+        return self_check()
     return CollectorApp().run(watchdog="--watchdog" in args)

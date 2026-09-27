@@ -36,20 +36,22 @@ def test_delete_presets(recorder, clock, export, scope, left):
     assert len(starts(export())) == left
 
 
-def test_delete_today_uses_the_local_calendar_day(recorder, clock, export, monkeypatch):
-    monkeypatch.setenv("TZ", "Asia/Tokyo")
-    import time
+def test_delete_today_uses_the_local_calendar_day(tmp_path, clock, export):
+    from datetime import timezone
 
-    time.tzset()
-    try:
-        clock.now = T0.replace(hour=3)  # 12:00 in Tokyo
-        session(recorder, T0.replace(hour=0) - timedelta(hours=1))  # 08:00 Tokyo, today
-        session(recorder, T0.replace(hour=0) - timedelta(hours=16))  # yesterday in Tokyo
-        recorder.delete("today")
-        assert starts(export()) == ["2026-08-31"]
-    finally:
-        monkeypatch.delenv("TZ")
-        time.tzset()
+    from flowlens.core import Recorder
+
+    tokyo = timezone(timedelta(hours=9))
+    recorder = Recorder(tmp_path / "tokyo", clock=clock, local_tz=tokyo)
+    clock.now = T0.replace(hour=3)  # 12:00 in Tokyo
+    session(recorder, T0.replace(hour=0) - timedelta(hours=1))  # 08:00 Tokyo, today
+    session(recorder, T0.replace(hour=0) - timedelta(hours=16))  # yesterday in Tokyo
+    recorder.delete("today")
+    exp_path = tmp_path / "tokyo.zip"
+    recorder.export(TimeRange(T0 - timedelta(days=2), T0 + timedelta(days=1)), "pw", exp_path)
+    from conftest import open_export
+
+    assert starts(open_export(exp_path, tmp_path, "pw")) == ["2026-08-31"]
 
 
 def test_retention_deletes_old_records_automatically(recorder, clock, export):

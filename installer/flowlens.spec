@@ -1,15 +1,26 @@
 # -*- mode: python ; coding: utf-8 -*-
 # PyInstaller specification for FlowLens Collector
 
+import os
+
+from PyInstaller.utils.hooks import collect_all
+
 block_cipher = None
+ROOT = os.path.abspath(os.path.join(SPECPATH, '..'))
+
+# uiautomation ships DLLs and comtypes generates wrappers at run time: take all of both.
+extra_datas, extra_binaries, extra_hidden = [], [], []
+for package in ('uiautomation', 'comtypes'):
+    d, b, h = collect_all(package)
+    extra_datas += d
+    extra_binaries += b
+    extra_hidden += h
 
 a = Analysis(
-    ['../src/flowlens/__main__.py'],
-    pathex=['../src'],
-    binaries=[],
-    datas=[
-        ('../LICENSE', '.'),
-    ],
+    [os.path.join(ROOT, 'src', 'flowlens', '__main__.py')],
+    pathex=[os.path.join(ROOT, 'src')],
+    binaries=extra_binaries,
+    datas=[(os.path.join(ROOT, 'LICENSE'), '.')] + extra_datas,
     hiddenimports=[
         'flowlens.windows.app',
         'flowlens.windows.shell',
@@ -21,7 +32,6 @@ a = Analysis(
         'flowlens.windows.settings_window',
         'flowlens.windows.autostart',
         'pyzipper',
-        'uiautomation',
         'psutil',
         'win32api',
         'win32con',
@@ -30,7 +40,7 @@ a = Analysis(
         'win32ts',
         'win32evtlog',
         'winreg',
-    ],
+    ] + extra_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -45,8 +55,6 @@ a = Analysis(
         'websockets',
         'openai',
         'anthropic',
-        'google-genai',
-        'google-generativeai',
         'ollama',
     ],
     win_no_prefer_redirects=False,

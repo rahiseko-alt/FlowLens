@@ -11,7 +11,7 @@ from __future__ import annotations
 import shutil
 import threading
 from collections.abc import Callable, Iterable
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any
 
@@ -62,7 +62,13 @@ def _utc(value: datetime) -> datetime:
 class Recorder:
     """Thread-safe: observation threads and the UI thread may call it concurrently."""
 
-    def __init__(self, storage_dir: str | Path, clock: Callable[[], datetime] | None = None):
+    def __init__(
+        self,
+        storage_dir: str | Path,
+        clock: Callable[[], datetime] | None = None,
+        local_tz: tzinfo | None = None,
+    ):
+        """`local_tz` decides what "today" means for deletion; None = the PC's time zone."""
         self.storage_dir = Path(storage_dir)
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.storage_dir / "collector.db"
@@ -70,6 +76,7 @@ class Recorder:
         self._keys = KeyManager(self.storage_dir)
         self._config = ConfigManager(self.storage_dir)
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.local_tz = local_tz
         self._lock = threading.RLock()
 
         self._away: set[type] = set()
@@ -534,7 +541,7 @@ class Recorder:
             elif target == "all":
                 self.storage.delete_range(None, None)
             elif target == "today":
-                local = now.astimezone()
+                local = now.astimezone(self.local_tz)
                 midnight = local.replace(hour=0, minute=0, second=0, microsecond=0)
                 self.storage.delete_range(midnight.astimezone(timezone.utc), None)
             elif target in DELETE_PRESETS:
