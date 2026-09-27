@@ -15,6 +15,7 @@
 - 作るものは FlowLens（PC 業務観測・業務改善診断システム）。用語は `CONTEXT.md` に定義した
 - クライアント PC では AI を一切動かさない（ADR 0001）。最小データ原則: 業務フローの発見に要らないデータは保存しない（ADR 0002）
 - DeskMate 流用調査の結果と5分類は `docs/research/deskmate-survey.md` にある。記録の本体（daemon）とデータベースは書き直し、監視の部品を選んで流用する方針
+- 目的・一言説明・利用の流れを `docs/product-overview.md` に確定した。インストールは社員本人、渡し方は製品で決めない（手元に1ファイル保存まで）、コンサルタントは基本本人だが他者もありうる
 - 下書きの提出物: https://github.com/rahiseko-alt/FlowLens/pull/1
 
 **次にやること**
