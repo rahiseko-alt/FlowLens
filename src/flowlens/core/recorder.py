@@ -575,6 +575,27 @@ class Recorder:
             summary_data = generate_summary(temp_db_path)
             summary_json = json.dumps(summary_data, indent=2, ensure_ascii=False)
 
+            readme_text = (
+                "FlowLens Diagnostic Export\n"
+                "==========================\n\n"
+                "This archive contains diagnostic activity data exported by FlowLens Collector.\n\n"
+                "Included files:\n"
+                "- data.sqlite: SQLite database of collected session/event tables.\n"
+                "- manifest.json: Export metadata, time range, machine ID, and session counts.\n"
+                "- summary.json: Pre-aggregated statistics (live/past durations and transfers).\n"
+                "- redaction_report.json: Audit of excluded records filtered out.\n"
+                "- README.txt: This summary document.\n\n"
+                "How to Open:\n"
+                "Open with 7-Zip using the AES-256 password specified during export.\n\n"
+                "Data Granularity (Live vs Past):\n"
+                "- Live records (is_past = 0): High-resolution focus, typing, and transfers.\n"
+                "- Past records (is_past = 1): Coarse footprints from Windows records.\n\n"
+                "Privacy & Analysis:\n"
+                "- Window titles and file names are keyed HMAC-SHA256 hashes.\n"
+                "- Raw text, keystroke characters, and clipboard contents are never stored.\n"
+                "- Refer to docs/consultant-guide.md for Claude Code analysis workflows.\n"
+            )
+
             # Build AES-256 ZIP using pyzipper
             with pyzipper.AESZipFile(
                 dest_path,
@@ -587,6 +608,7 @@ class Recorder:
                 zf.writestr("manifest.json", manifest_json)
                 zf.writestr("redaction_report.json", redaction_report_json)
                 zf.writestr("summary.json", summary_json)
+                zf.writestr("README.txt", readme_text)
 
         return dest_path
 
