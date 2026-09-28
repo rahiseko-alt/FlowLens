@@ -129,7 +129,7 @@ def test_label_table_is_a_separate_file(recorder, tmp_path):
     use(recorder, "excel.exe", 0, 20, title="月次報告.xlsx - Excel")
     code, out = analyze(tmp_path, make_export(recorder, tmp_path))
 
-    tables = list((out / "do_not_send_to_ai").glob("*.json"))
+    tables = list((out.parent / f"{out.name}_do_not_send_to_ai").glob("*.json"))
     assert len(tables) == 1
     labels = json.loads(tables[0].read_text(encoding="utf-8"))
     assert re.fullmatch(r"[0-9a-f]{16}", labels["ファイル A"])

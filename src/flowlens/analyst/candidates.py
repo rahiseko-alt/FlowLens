@@ -32,7 +32,8 @@ class Criteria:
         return count >= self.min_count and days >= self.min_days
 
 
-def estimate(count: int, days: int, median_seconds: float | None) -> dict[str, Any]:
+def estimate(count: int, recorded_days: int, median_seconds: float | None) -> dict[str, Any]:
+    """`recorded_days`: days recorded for the people involved, not only the days it was seen."""
     if median_seconds is None:
         return {
             "minutes_per_time": None,
@@ -40,14 +41,14 @@ def estimate(count: int, days: int, median_seconds: float | None) -> dict[str, A
             "formula": "1回あたりの時間が分からないため、月あたりの時間は推定していません",
             "estimate_note": ESTIMATE_NOTE,
         }
-    per_day = count / days
+    per_day = count / recorded_days
     minutes = median_seconds / 60
     return {
         "minutes_per_time": round(minutes, 1),
         "monthly_minutes_estimate": round(per_day * minutes * WORKING_DAYS_PER_MONTH),
         "formula": (
-            f"1日あたり {per_day:.1f} 回 × 1回 {minutes:.1f} 分（中央値）"
-            f" × {WORKING_DAYS_PER_MONTH} 日"
+            f"記録した {recorded_days} 日で {count} 回（1日あたり {per_day:.2f} 回）"
+            f" × 1回 {minutes:.1f} 分（中央値） × {WORKING_DAYS_PER_MONTH} 日"
         ),
         "estimate_note": ESTIMATE_NOTE,
     }
@@ -73,7 +74,9 @@ def scheduled_files(
     opened: dict[tuple[str, str], list] = defaultdict(list)
     people: dict[tuple[str, str], set] = defaultdict(set)
     for export in exports:
-        for r in export.db.execute("SELECT file_symbol, file_ext, timestamp FROM file_events"):
+        for r in export.db.execute(
+            "SELECT file_symbol, file_ext, timestamp FROM file_events WHERE file_symbol != ''"
+        ):
             opened[(r["file_symbol"], r["file_ext"])].append(local(r["timestamp"], tz))
             people[(r["file_symbol"], r["file_ext"])].add(export.manifest.get("device_id", ""))
 
@@ -91,7 +94,7 @@ def scheduled_files(
                 "days": days,
                 "people": len(people[(symbol, ext)]),
                 "timing": {"hour": hour, "share": round(at_hour / len(times), 3)},
-                **estimate(len(times), days, None),
+                **estimate(len(times), days, None),  # time per open is not known
             }
         )
     return found
@@ -100,6 +103,18 @@ def scheduled_files(
 GLIMPSE_SECONDS = 5  # a window shown for less than this is passing through, not work
 BREAK_SECONDS = 120  # a longer gap (away, locked, paused) ends a flow
 FLOW_LENGTHS = (2, 3, 4)
+# Copy -> paste later than this is not one transfer's work; it counts as this long.
+TRANSFER_CAP_SECONDS = 300
+
+
+def recorded_days(exports: list[OpenedExport], tz: tzinfo) -> dict[str, int]:
+    """Days with any Live Capture, per person (device)."""
+    days: dict[str, set] = defaultdict(set)
+    for export in exports:
+        person = export.manifest.get("device_id", "")
+        for r in export.db.execute("SELECT start_time FROM app_sessions WHERE is_past = 0"):
+            days[person].add(local(r["start_time"], tz).date())
+    return {person: len(d) for person, d in days.items()}
 
 
 def _median(values: list[float]) -> float:
@@ -146,6 +161,7 @@ def flows(exports: list[OpenedExport], tz: tzinfo, criteria: Criteria) -> list[d
                     seconds = (window[-1]["end"] - window[0]["start"]).total_seconds()
                     seen[steps].append((window[0]["start"].astimezone(tz).date(), seconds, person))
 
+    recorded = recorded_days(exports, tz)
     found = {}
     for steps, hits in seen.items():
         days = len({day for day, _, _ in hits})
@@ -162,14 +178,19 @@ def flows(exports: list[OpenedExport], tz: tzinfo, criteria: Criteria) -> list[d
         longer = [other for other in found if inside(steps, other)]
         if any(len(found[other][0]) == len(hits) for other in longer):
             continue  # never happens apart from the longer flow
+        people = {person for _, _, person in hits}
         candidate = {
             "kind": "流れ",
             "steps": list(steps),
             "labels": [],
             "count": len(hits),
             "days": days,
-            "people": len({person for _, _, person in hits}),
-            **estimate(len(hits), days, _median([s for _, s, _ in hits])),
+            "people": len(people),
+            **estimate(
+                len(hits),
+                sum(recorded[p] for p in people),
+                _median([s for _, s, _ in hits]),
+            ),
         }
         if longer:
             candidate["contained_in"] = [list(other) for other in sorted(longer)]
@@ -217,9 +238,10 @@ def transfers(
             copied, pasted = (datetime.fromisoformat(r[c]) for c in ("copy_time", "paste_time"))
             screen = _screen_at(sessions, pasted) or {"symbol": "", "ext": ""}
             key = (r["source_app"], r["target_app"], screen["symbol"], screen["ext"])
-            seconds = max((pasted - copied).total_seconds(), 0.0)
+            seconds = min(max((pasted - copied).total_seconds(), 0.0), TRANSFER_CAP_SECONDS)
             grouped[key].append((copied.astimezone(tz).date(), seconds, person))
 
+    recorded = recorded_days(exports, tz)
     found = []
     for (source, target, symbol, ext), hits in grouped.items():
         days = len({day for day, _, _ in hits})
@@ -233,7 +255,11 @@ def transfers(
                 "count": len(hits),
                 "days": days,
                 "people": len({person for _, _, person in hits}),
-                **estimate(len(hits), days, _median([s for _, s, _ in hits])),
+                **estimate(
+                    len(hits),
+                    sum(recorded[p] for p in {person for _, _, person in hits}),
+                    _median([s for _, s, _ in hits]),
+                ),
             }
         )
     listed = [{"from": s, "to": t, "count": n} for (s, t), n in pairs.most_common()]

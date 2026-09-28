@@ -16,14 +16,14 @@ python -m flowlens.analyst Aさん.zip Bさん.zip --out ./analysis
 - 「繰り返し」とみなす基準は、既定で「2日以上にわたり合計3回以上」です。データが少ないときは `--min-days` と `--min-count` で変えて、もう一度実行します。
 - 同じ社員の期間の重なる書き出しを2つ渡しても、二重には数えません。
 
-`./analysis` には、毎回次の4つができます。
+`./analysis` には毎回次の3つができ、呼び名の対応表だけは隣の `./analysis_do_not_send_to_ai` に分けて置かれます。
 
 | ファイル | 中身 | AI に渡すか |
 | --- | --- | --- |
 | `analysis_summary.json` | プログラムが数えた要約（Analysis Summary）。元の記録の行、記号、機器 ID は入っていない | 渡す |
 | `confirmation_questions.md` | 報告会で社員に聞く質問の下書き（確認リスト） | 渡す |
 | `instructions_for_claude.md` | Claude Code への指示書 | 渡す |
-| `do_not_send_to_ai/labels.json` | 「ファイル A」などの呼び名と記号の対応表 | **渡さない** |
+| `../analysis_do_not_send_to_ai/labels.json` | 「ファイル A」などの呼び名と記号の対応表。AI が読めないよう、分析フォルダの外に置く | **渡さない** |
 
 中身を直接確かめたいときは、7-Zip で ZIP を開けます（AES-256 のため Windows の標準機能では開けません）。
 
@@ -66,12 +66,12 @@ python -m flowlens.analyst Aさん.zip Bさん.zip --out ./analysis
 > `instructions_for_claude.md` に従って、ご提案書を書いてください。
 
 - 指示書に、読むのは要約と確認リストだけ、数字は要約の値だけを使う、推定は推定と書く、個人を比べない、と書いてあります。
-- `do_not_send_to_ai` フォルダは AI に読ませないでください。報告会で答えを聞いたあと、呼び名を記号に結び付けるときにだけ使います。
+- `analysis_do_not_send_to_ai` フォルダは AI に読ませないでください（Claude Code は `./analysis` の中で開いてください）。報告会で答えを聞いたあと、呼び名を記号に結び付けるときにだけ使います。
 - 元の記録（下の表）を AI に丸ごと読ませないでください（`docs/adr/0006-analysis-counts-first-ai-reads-summary.md`）。2 の表は、コンサルタントが中身を確かめるときの参考です。
 
 ## 4. 報告会で確かめること
 
-`confirmation_questions.md` の質問をもとに伺います。答えは、`do_not_send_to_ai/labels.json` の呼び名と記号の対応で記録に結び付けられます。
+`confirmation_questions.md` の質問をもとに伺います。答えは、`analysis_do_not_send_to_ai/labels.json` の呼び名と記号の対応で記録に結び付けられます。
 
 - 候補ごとに、記号の画面・ファイルが何か（例: 「毎朝9時に開く Excel ファイル A は何の表ですか」）
 - その作業の目的、例外の多さ、判断が要る部分

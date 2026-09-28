@@ -14,6 +14,16 @@ import pyzipper
 
 SUPPORTED_SCHEMA_VERSIONS = {2}
 REQUIRED_MEMBERS = ("data.sqlite", "manifest.json", "redaction_report.json")
+REQUIRED_TABLES = {
+    "app_sessions",
+    "typing_activities",
+    "operation_events",
+    "clipboard_transfers",
+    "file_events",
+    "browser_events",
+    "past_app_stats",
+    "past_import_runs",
+}
 
 
 class ExportError(Exception):
@@ -32,6 +42,8 @@ class OpenedExport:
 
 def open_export(path: Path, password: str, work_dir: Path) -> OpenedExport:
     """Decrypts `path` into `work_dir` (which the caller deletes afterwards)."""
+    if not path.is_file():
+        raise ExportError(path, "ファイルが見つかりません")
     try:
         with pyzipper.AESZipFile(path) as zf:
             zf.setpassword(password.encode("utf-8"))
@@ -51,6 +63,12 @@ def open_export(path: Path, password: str, work_dir: Path) -> OpenedExport:
         redaction = json.loads(members["redaction_report.json"])
     except ValueError as exc:
         raise ExportError(path, "FlowLens の書き出しではありません") from exc
+    if not (
+        isinstance(manifest, dict)
+        and isinstance(redaction, dict)
+        and all(isinstance(manifest.get(k), str) for k in ("period_start", "period_end"))
+    ):
+        raise ExportError(path, "書き出しの説明（manifest.json）が壊れています")
     version = manifest.get("schema_version")
     if version not in SUPPORTED_SCHEMA_VERSIONS:
         raise ExportError(path, f"対応していない版です（schema_version={version}）")
@@ -59,6 +77,14 @@ def open_export(path: Path, password: str, work_dir: Path) -> OpenedExport:
     db_path.write_bytes(members["data.sqlite"])
     db = sqlite3.connect(db_path)
     db.row_factory = sqlite3.Row
+    try:
+        tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    except sqlite3.DatabaseError as exc:
+        db.close()
+        raise ExportError(path, "記録（data.sqlite）が壊れています") from exc
+    if not REQUIRED_TABLES <= tables:
+        db.close()
+        raise ExportError(path, "記録（data.sqlite）に必要な表がありません")
     return OpenedExport(manifest, redaction, db)
 
 
@@ -171,8 +197,10 @@ def merge_by_person(exports: list[OpenedExport]) -> list[OpenedExport]:
             "period_start": min(kept.manifest["period_start"], export.manifest["period_start"]),
             "period_end": max(kept.manifest["period_end"], export.manifest["period_end"]),
         }
+        # Removal counts cannot be split by time: for one person keep the larger
+        # figure of the overlapping exports rather than adding them up.
         kept.redaction = {
-            key: kept.redaction.get(key, 0) + value
+            key: max(kept.redaction.get(key, 0), value)
             for key, value in export.redaction.items()
             if isinstance(value, int)
         }

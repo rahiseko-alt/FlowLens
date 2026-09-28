@@ -40,9 +40,9 @@ def test_the_folder_always_has_the_same_shape(recorder, tmp_path):
     assert sorted(p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file()) == [
         "analysis_summary.json",
         "confirmation_questions.md",
-        "do_not_send_to_ai/labels.json",
         "instructions_for_claude.md",
     ]
+    assert (out.parent / f"{out.name}_do_not_send_to_ai" / "labels.json").is_file()
 
 
 def test_every_candidate_has_a_question(recorder, tmp_path):

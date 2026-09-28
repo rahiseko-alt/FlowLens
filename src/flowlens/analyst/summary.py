@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from collections.abc import Iterator
-from datetime import datetime, timedelta, tzinfo
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Any
 
 from flowlens.analyst.candidates import Criteria, flows, rank, scheduled_files, transfers
@@ -21,28 +21,37 @@ from flowlens.analyst.reader import OpenedExport, record_counts
 ANALYSIS_VERSION = 1
 FEW_LIVE_DAYS = 3  # below this, the summary warns that candidates are weak
 WEEKDAYS = "月火水木金土日"
-PERMISSION_CODES = ("1314", "PermissionError", "13", " 5")
+# Windows error codes meaning "access denied" / "a required privilege is not held".
+PERMISSION_WINERRORS = {"5", "1314"}
 
 
 def _share(part: float, total: float) -> float:
     return round(part / total, 3) if total else 0.0
 
 
-def _split_by_hour(start: datetime, end: datetime) -> Iterator[tuple[datetime, float]]:
-    """(hour start, seconds) for each local clock hour the interval touches."""
-    cursor = start
+def _split_by_hour(start: datetime, end: datetime, tz: tzinfo) -> Iterator[tuple[datetime, float]]:
+    """(local time, seconds) for each local clock hour the interval touches.
+
+    Steps in real (UTC) time, so an hour repeated or skipped by a clock change is
+    counted as the time that actually passed.
+    """
+    cursor, end = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
     while cursor < end:
-        next_hour = cursor.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-        stop = min(next_hour, end)
-        yield cursor, (stop - cursor).total_seconds()
+        here = cursor.astimezone(tz)
+        into_hour = timedelta(
+            minutes=here.minute, seconds=here.second, microseconds=here.microsecond
+        )
+        stop = min(cursor + timedelta(hours=1) - into_hour, end)
+        yield here, (stop - cursor).total_seconds()
         cursor = stop
 
 
 def _reason(error: str | None) -> str:
-    code = error or ""
-    if any(part in code for part in PERMISSION_CODES):
+    """Error codes look like "PermissionError 13" or "OSError 1314" (name, then code)."""
+    name, _, code = (error or "").partition(" ")
+    if name == "PermissionError" or code in PERMISSION_WINERRORS:
         return "管理者権限が必要なため読めませんでした"
-    return f"読めませんでした（{code}）" if code else "読めませんでした"
+    return f"読めませんでした（{error}）" if error else "読めませんでした"
 
 
 def build_summary(
@@ -117,8 +126,9 @@ def _live(exports: list[OpenedExport], tz: tzinfo, labels: Labeler) -> dict[str,
             screen_seconds[(r["app_name"], r["title_symbol"], r["title_ext"])] += r[
                 "duration_seconds"
             ]
-        start, end = _local(r["start_time"], tz), _local(r["end_time"], tz)
-        for hour, seconds in _split_by_hour(start, end):
+        start = datetime.fromisoformat(r["start_time"])
+        end = datetime.fromisoformat(r["end_time"])
+        for hour, seconds in _split_by_hour(start, end, tz):
             grid[WEEKDAYS[hour.weekday()]][str(hour.hour)] += seconds
 
     typing: dict[str, Counter[str]] = defaultdict(Counter)
@@ -174,6 +184,8 @@ def _past(exports: list[OpenedExport], tz: tzinfo, labels: Labeler) -> dict[str,
     file_days: dict[tuple[str, str], set] = defaultdict(set)
     for r in _rows(exports, "SELECT file_symbol, file_ext, timestamp FROM file_events"):
         ext_opens[r["file_ext"]] += 1
+        if not r["file_symbol"]:
+            continue  # name cleared on export: counts for the type, not as a file
         key = (r["file_symbol"], r["file_ext"])
         file_opens[key] += 1
         file_days[key].add(_local(r["timestamp"], tz).date())
@@ -182,11 +194,11 @@ def _past(exports: list[OpenedExport], tz: tzinfo, labels: Labeler) -> dict[str,
     for r in _rows(exports, "SELECT domain, timestamp FROM browser_events"):
         site_days[r["domain"]].add(_local(r["timestamp"], tz).date())
 
+    latest: dict[str, Any] = {}
+    for r in _rows(exports, "SELECT source, status, error FROM past_import_runs ORDER BY run_at"):
+        latest[r["source"]] = r  # a later run (e.g. read again) replaces an earlier one
     unreadable = {
-        r["source"]: _reason(r["error"])
-        for r in _rows(
-            exports, "SELECT source, error FROM past_import_runs WHERE status = 'failed'"
-        )
+        source: _reason(r["error"]) for source, r in latest.items() if r["status"] == "failed"
     }
     return {
         "app_usage": [

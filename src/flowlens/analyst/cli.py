@@ -24,8 +24,10 @@ from flowlens.analyst.summary import build_summary
 SUMMARY_FILE = "analysis_summary.json"
 QUESTIONS_FILE = "confirmation_questions.md"
 INSTRUCTIONS_FILE = "instructions_for_claude.md"
-# Kept apart so the consultant never hands it to the AI with the summary.
-LABELS_FILE = Path("do_not_send_to_ai") / "labels.json"
+# Written next to the output folder, not inside it: Claude Code is opened in the
+# output folder and can read anything there (ADR 0006).
+LABELS_DIR_SUFFIX = "_do_not_send_to_ai"
+LABELS_FILE = "labels.json"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -61,6 +63,8 @@ def main(
         opened = []
         try:
             for path in args.exports:
+                if not path.is_file():
+                    raise ExportError(path, "ファイルが見つかりません")
                 password = env_password or ask_password(f"{path.name} のパスワード: ")
                 opened.append(open_export(path, password, Path(work)))
             summary, labels = build_summary(
@@ -76,14 +80,14 @@ def main(
             for export in opened:
                 export.db.close()
 
+    labels_dir = args.out.parent / f"{args.out.name}{LABELS_DIR_SUFFIX}"
     outputs = {
-        SUMMARY_FILE: json.dumps(summary, ensure_ascii=False, indent=2),
-        QUESTIONS_FILE: confirmation_questions(summary),
-        INSTRUCTIONS_FILE: INSTRUCTIONS,
-        LABELS_FILE: json.dumps(labels, ensure_ascii=False, indent=2),
+        args.out / SUMMARY_FILE: json.dumps(summary, ensure_ascii=False, indent=2),
+        args.out / QUESTIONS_FILE: confirmation_questions(summary),
+        args.out / INSTRUCTIONS_FILE: INSTRUCTIONS,
+        labels_dir / LABELS_FILE: json.dumps(labels, ensure_ascii=False, indent=2),
     }
-    for name, text in outputs.items():
-        target = args.out / name
+    for target, text in outputs.items():
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding="utf-8")
     print(f"書き出しました: {args.out / SUMMARY_FILE}")
