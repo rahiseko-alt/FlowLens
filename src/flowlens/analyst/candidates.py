@@ -264,3 +264,44 @@ def transfers(
         )
     listed = [{"from": s, "to": t, "count": n} for (s, t), n in pairs.most_common()]
     return listed, without_paste, found
+
+
+# A site counts as part of the work routine only if it is used on this many days;
+# with 30 days of history a lower bar lists most of the sites ever opened.
+SITE_MIN_DAYS = 5
+# Sign-in pages come with almost every site and say nothing about the work.
+_SIGN_IN_PREFIXES = ("accounts.", "auth.", "login.", "signin.", "sso.", "oauth.")
+
+
+def frequent_sites(
+    exports: list[OpenedExport], tz: tzinfo, criteria: Criteria
+) -> list[dict[str, Any]]:
+    """Sites opened on many days (Past Import): a web task done again and again."""
+    visited: dict[str, list] = defaultdict(list)
+    people: dict[str, set] = defaultdict(set)
+    for export in exports:
+        for r in export.db.execute("SELECT domain, timestamp FROM browser_events"):
+            if r["domain"].startswith(_SIGN_IN_PREFIXES):
+                continue
+            visited[r["domain"]].append(local(r["timestamp"], tz))
+            people[r["domain"]].add(export.manifest.get("device_id", ""))
+
+    found = []
+    for domain, times in visited.items():
+        days = len({t.date() for t in times})
+        if days < SITE_MIN_DAYS or not criteria.met(len(times), days):
+            continue
+        hour, at_hour = Counter(t.hour for t in times).most_common(1)[0]
+        found.append(
+            {
+                "kind": "よく使うサイト",
+                "steps": [domain],
+                "labels": [],
+                "count": len(times),
+                "days": days,
+                "people": len(people[domain]),
+                "timing": {"hour": hour, "share": round(at_hour / len(times), 3)},
+                **estimate(len(times), days, None),  # time per visit is not known
+            }
+        )
+    return found

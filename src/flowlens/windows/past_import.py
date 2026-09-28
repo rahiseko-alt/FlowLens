@@ -131,6 +131,35 @@ def read_security_event_log(max_days: int = 30) -> list[PastSystemEventObservati
     return _read_event_log("Security", SECURITY_EVENTS, "security_log", max_days)
 
 
+# Apps started from the taskbar or Start are kept under an app id, not a path.
+_OFFICE_ID = re.compile(r"Microsoft\.Office\.([A-Za-z]+)\.EXE\.\d+", re.IGNORECASE)
+_KNOWN_APP_IDS = {
+    "chrome": "chrome.exe",
+    "msedge": "msedge.exe",
+    "microsoft.windows.explorer": "explorer.exe",
+}
+
+
+def user_assist_app(decoded_name: str) -> str | None:
+    """The executable a UserAssist entry stands for, or None for documents and shortcuts.
+
+    Entries are a path ("{GUID}\\Google\\Chrome\\Application\\chrome.exe"), an Office app id
+    ("Microsoft.Office.EXCEL.EXE.15"), another app id, or a shortcut / document name.
+    Shortcut and document names can be anything the user typed, so they are skipped.
+    """
+    last = decoded_name.replace("/", "\\").split("\\")[-1]
+    if last.lower().endswith(".exe"):
+        return last
+    office = _OFFICE_ID.fullmatch(last)
+    if office:
+        return f"{office.group(1).lower()}.exe"
+    if last.lower() in _KNOWN_APP_IDS:
+        return _KNOWN_APP_IDS[last.lower()]
+    if "!" in last and not last.lower().endswith(".lnk"):
+        return last  # a Store app id; the core keeps it only if it has that exact shape
+    return None
+
+
 def read_user_assist(max_days: int = 30) -> list[PastAppStatsObservation]:
     """Per-app counters Explorer keeps: run count, total focus time, last run.
 
@@ -150,8 +179,8 @@ def read_user_assist(max_days: int = 30) -> list[PastAppStatsObservation]:
             with count_key:
                 for j in range(reg.QueryInfoKey(count_key)[1]):
                     name, data, _ = reg.EnumValue(count_key, j)
-                    exe = codecs.decode(name, "rot_13").replace("/", "\\").split("\\")[-1]
-                    if not exe.lower().endswith(".exe") or len(data) != 72:
+                    exe = user_assist_app(codecs.decode(name, "rot_13"))
+                    if exe is None or len(data) != 72:
                         continue
                     runs = struct.unpack_from("<I", data, 4)[0]
                     focus_ms = struct.unpack_from("<I", data, 12)[0]
