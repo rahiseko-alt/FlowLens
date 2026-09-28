@@ -12,6 +12,9 @@ from collections.abc import Iterator
 from datetime import datetime, timedelta, tzinfo
 from typing import Any
 
+from flowlens.analyst.candidates import Criteria, rank, scheduled_files
+from flowlens.analyst.common import local as _local
+from flowlens.analyst.common import rows as _rows
 from flowlens.analyst.labels import Labeler
 from flowlens.analyst.reader import OpenedExport
 
@@ -19,15 +22,6 @@ ANALYSIS_VERSION = 1
 FEW_LIVE_DAYS = 3  # below this, the summary warns that candidates are weak
 WEEKDAYS = "月火水木金土日"
 PERMISSION_CODES = ("1314", "PermissionError", "13", " 5")
-
-
-def _local(value: str, tz: tzinfo) -> datetime:
-    return datetime.fromisoformat(value).astimezone(tz)
-
-
-def _rows(exports: list[OpenedExport], sql: str) -> Iterator[Any]:
-    for export in exports:
-        yield from export.db.execute(sql)
 
 
 def _share(part: float, total: float) -> float:
@@ -51,16 +45,21 @@ def _reason(error: str | None) -> str:
     return f"読めませんでした（{code}）" if code else "読めませんでした"
 
 
-def build_summary(exports: list[OpenedExport], tz: tzinfo) -> tuple[dict[str, Any], dict[str, str]]:
+def build_summary(
+    exports: list[OpenedExport], tz: tzinfo, criteria: Criteria = Criteria()
+) -> tuple[dict[str, Any], dict[str, str]]:
     """Returns (Analysis Summary, label -> symbol table)."""
     labels = Labeler()
-    return {
+    summary = {
         "analysis_version": ANALYSIS_VERSION,
         "time_zone": str(tz),
+        "criteria": {"min_days": criteria.min_days, "min_count": criteria.min_count},
         "basis": _basis(exports, tz),
         "live": _live(exports, tz, labels),
         "past": _past(exports, tz, labels),
-    }, labels.table()
+    }
+    summary["candidates"] = rank(scheduled_files(exports, tz, labels, criteria))
+    return summary, labels.table()
 
 
 def _basis(exports: list[OpenedExport], tz: tzinfo) -> dict[str, Any]:

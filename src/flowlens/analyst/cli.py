@@ -16,6 +16,7 @@ from collections.abc import Callable
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from flowlens.analyst.candidates import Criteria
 from flowlens.analyst.reader import ExportError, open_export
 from flowlens.analyst.summary import build_summary
 
@@ -31,6 +32,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("exports", nargs="+", type=Path, help="診断データ（ZIP）")
     parser.add_argument("--out", required=True, type=Path, help="結果を書き出すフォルダ")
+    parser.add_argument(
+        "--min-days", type=int, default=Criteria.min_days, help="繰り返しとみなす最少の日数"
+    )
+    parser.add_argument(
+        "--min-count", type=int, default=Criteria.min_count, help="繰り返しとみなす最少の回数"
+    )
     parser.add_argument("--tz", default="Asia/Tokyo", help="集計に使う地域の時刻（既定: 日本時間）")
     return parser
 
@@ -53,7 +60,9 @@ def main(
             for path in args.exports:
                 password = env_password or ask_password(f"{path.name} のパスワード: ")
                 opened.append(open_export(path, password, Path(work)))
-            summary, labels = build_summary(opened, tz)
+            summary, labels = build_summary(
+                opened, tz, Criteria(min_days=args.min_days, min_count=args.min_count)
+            )
         except ExportError as exc:
             print(f"読み込めませんでした。{exc}", file=sys.stderr)
             return 1
