@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from datetime import datetime, timedelta, tzinfo
 from typing import Any
 
-from flowlens.analyst.candidates import Criteria, rank, scheduled_files
+from flowlens.analyst.candidates import Criteria, flows, rank, scheduled_files, transfers
 from flowlens.analyst.common import local as _local
 from flowlens.analyst.common import rows as _rows
 from flowlens.analyst.labels import Labeler
@@ -58,7 +58,14 @@ def build_summary(
         "live": _live(exports, tz, labels),
         "past": _past(exports, tz, labels),
     }
-    summary["candidates"] = rank(scheduled_files(exports, tz, labels, criteria))
+    pairs, without_paste, transfer_candidates = transfers(exports, tz, labels, criteria)
+    summary["live"]["transfers"] = pairs
+    summary["live"]["transfers_without_paste"] = without_paste
+    summary["candidates"] = rank(
+        scheduled_files(exports, tz, labels, criteria)
+        + flows(exports, tz, criteria)
+        + transfer_candidates
+    )
     return summary, labels.table()
 
 
@@ -112,8 +119,30 @@ def _live(exports: list[OpenedExport], tz: tzinfo, labels: Labeler) -> dict[str,
         for hour, seconds in _split_by_hour(start, end):
             grid[WEEKDAYS[hour.weekday()]][str(hour.hour)] += seconds
 
+    typing: dict[str, Counter[str]] = defaultdict(Counter)
+    for r in _rows(
+        exports,
+        "SELECT app_name, keystroke_count, duration_seconds FROM typing_activities "
+        "WHERE is_past = 0 AND is_password = 0",
+    ):
+        typing[r["app_name"]]["keystrokes"] += r["keystroke_count"]
+        typing[r["app_name"]]["seconds"] += r["duration_seconds"]
+    keys: dict[str, Counter[str]] = defaultdict(Counter)
+    for r in _rows(
+        exports, "SELECT app_name, operation_type FROM operation_events WHERE is_past = 0"
+    ):
+        keys[r["app_name"]][r["operation_type"]] += 1
+
     total = sum(app_seconds.values())
     return {
+        "typing": [
+            {"app": app, "keystrokes": t["keystrokes"], "seconds": round(t["seconds"])}
+            for app, t in sorted(typing.items(), key=lambda i: -i[1]["keystrokes"])
+        ],
+        "operation_keys": [
+            {"app": app, "keys": dict(k.most_common())}
+            for app, k in sorted(keys.items(), key=lambda i: -sum(i[1].values()))
+        ],
         "app_time": [
             {"app": app, "seconds": round(s), "share": _share(s, total)}
             for app, s in app_seconds.most_common()
