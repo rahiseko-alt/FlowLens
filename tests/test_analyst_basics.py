@@ -9,34 +9,13 @@ from __future__ import annotations
 import json
 import re
 import socket
-from datetime import timedelta
 
 import pytest
 import pyzipper
-from conftest import PASSWORD, T0, use
+from analyst_support import analyze, make_export, summary
+from conftest import PASSWORD, use
 
 from flowlens.analyst import main
-from flowlens.core import TimeRange
-
-
-def make_export(recorder, tmp_path, name="export.zip", password=PASSWORD):
-    recorder.flush()
-    dest = tmp_path / "exports" / name
-    recorder.export(TimeRange(T0 - timedelta(days=60), T0 + timedelta(days=60)), password, dest)
-    return dest
-
-
-def analyze(tmp_path, *exports, passwords=None, extra=()):
-    out = tmp_path / "analysis"
-    answers = iter(passwords or [PASSWORD] * len(exports))
-    code = main(
-        [*map(str, exports), "--out", str(out), *extra], ask_password=lambda _: next(answers)
-    )
-    return code, out
-
-
-def summary(out):
-    return json.loads((out / "analysis_summary.json").read_text(encoding="utf-8"))
 
 
 def test_app_time_from_live_capture(recorder, tmp_path):

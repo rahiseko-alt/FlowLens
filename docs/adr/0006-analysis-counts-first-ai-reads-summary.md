@@ -6,7 +6,7 @@ Analyst 側では、プログラムが Diagnostic Export から Analysis Summary
 
 ## Consequences
 
-- AI に送るのは Analysis Summary だけで、題名・ファイル名は記号のまま。分析時に要約が AI の提供元へ送られることを、お客様への説明と同意書に明記する。
+- AI に送るのは Analysis Summary だけで、題名・ファイル名は記号をさらに「ファイル A」のような呼び名に置き換えたもの（中身は読めないまま）。呼び名と記号の対応表は AI に渡さない。分析時に要約が AI の提供元へ送られることを、お客様への説明と同意書に明記する。
 - 過去30日分（Past Import）では「時間の使い道」と「繰り返しの目星」を出し、操作の流れは Live Capture で裏付ける。
 - 題名が記号なので、Proposal Report には必ず確認リストを付ける。
 - 分析側は Claude Code が作る。
