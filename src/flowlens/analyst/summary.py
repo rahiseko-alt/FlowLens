@@ -12,7 +12,14 @@ from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Any
 
-from flowlens.analyst.candidates import Criteria, flows, rank, scheduled_files, transfers
+from flowlens.analyst.candidates import (
+    Criteria,
+    flows,
+    frequent_sites,
+    rank,
+    scheduled_files,
+    transfers,
+)
 from flowlens.analyst.common import local as _local
 from flowlens.analyst.common import rows as _rows
 from flowlens.analyst.labels import Labeler
@@ -54,6 +61,26 @@ def _reason(error: str | None) -> str:
     return f"読めませんでした（{error}）" if error else "読めませんでした"
 
 
+def _clock(minutes: float) -> str:
+    return f"{int(minutes) // 60:02d}:{int(minutes) % 60:02d}"
+
+
+def _pc_hours(first_last: dict[tuple[str, Any], list]) -> dict[str, Any]:
+    """Typical start and end of PC use per day, over all people and days (no per-person
+    figures). Median, so a late night or an early start does not move it much."""
+    if not first_last:
+        return {"days": 0, "typical_first": None, "typical_last": None, "days_by_weekday": {}}
+    firsts = sorted(f.hour * 60 + f.minute for f, _ in first_last.values())
+    lasts = sorted(last.hour * 60 + last.minute for _, last in first_last.values())
+    weekdays = Counter(WEEKDAYS[day.weekday()] for _, day in first_last)
+    return {
+        "days": len(first_last),
+        "typical_first": _clock(firsts[len(firsts) // 2]),
+        "typical_last": _clock(lasts[len(lasts) // 2]),
+        "days_by_weekday": {d: weekdays[d] for d in WEEKDAYS if d in weekdays},
+    }
+
+
 def build_summary(
     exports: list[OpenedExport], tz: tzinfo, criteria: Criteria = Criteria(), files: int = 0
 ) -> tuple[dict[str, Any], dict[str, str]]:
@@ -76,6 +103,7 @@ def build_summary(
     summary["live"]["transfers_without_paste"] = without_paste
     summary["candidates"] = rank(
         scheduled_files(exports, tz, labels, criteria)
+        + frequent_sites(exports, tz, criteria)
         + flows(exports, tz, criteria)
         + transfer_candidates
     )
@@ -194,6 +222,16 @@ def _past(exports: list[OpenedExport], tz: tzinfo, labels: Labeler) -> dict[str,
     for r in _rows(exports, "SELECT domain, timestamp FROM browser_events"):
         site_days[r["domain"]].add(_local(r["timestamp"], tz).date())
 
+    # First and last PC event per day (boot, resume, sleep, shutdown...): the working hours.
+    first_last: dict[tuple[str, Any], list] = {}
+    for export in exports:
+        person = export.manifest.get("device_id", "")
+        for r in export.db.execute("SELECT timestamp FROM system_events"):
+            t = _local(r["timestamp"], tz)
+            key = (person, t.date())
+            span = first_last.setdefault(key, [t, t])
+            span[0], span[1] = min(span[0], t), max(span[1], t)
+
     latest: dict[str, Any] = {}
     for r in _rows(exports, "SELECT source, status, error FROM past_import_runs ORDER BY run_at"):
         latest[r["source"]] = r  # a later run (e.g. read again) replaces an earlier one
@@ -201,6 +239,7 @@ def _past(exports: list[OpenedExport], tz: tzinfo, labels: Labeler) -> dict[str,
         source: _reason(r["error"]) for source, r in latest.items() if r["status"] == "failed"
     }
     return {
+        "pc_hours": _pc_hours(first_last),
         "app_usage": [
             {
                 "app": app,

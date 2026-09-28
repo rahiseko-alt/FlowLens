@@ -22,6 +22,12 @@ def _question(candidate: dict[str, Any]) -> str:
             f"{hour}時台によく開く{labels}は、何のファイルですか。"
             "開いて何をしていますか。毎回同じ手順ですか。"
         )
+    if candidate["kind"] == "よく使うサイト":
+        hour = candidate["timing"]["hour"]
+        return (
+            f"{candidate['days']}日にわたって開いている {steps}（{hour}時台に多い）では、"
+            "何をしていますか。毎回同じ入力や確認をしていますか。"
+        )
     if candidate["kind"] == "転記":
         target = f"（{labels}）" if labels else ""
         return (
