@@ -10,7 +10,7 @@ from __future__ import annotations
 from bisect import bisect_right
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import datetime, tzinfo
+from datetime import datetime, timedelta, tzinfo
 from typing import Any
 
 from flowlens.analyst.common import local
@@ -269,8 +269,54 @@ def transfers(
 # A site counts as part of the work routine only if it is used on this many days;
 # with 30 days of history a lower bar lists most of the sites ever opened.
 SITE_MIN_DAYS = 5
-# Sign-in pages come with almost every site and say nothing about the work.
-_SIGN_IN_PREFIXES = ("accounts.", "auth.", "login.", "signin.", "sso.", "oauth.")
+# Sign-in and account pages come with almost every site and say nothing about the work.
+_SIGN_IN_PREFIXES = ("accounts.", "auth.", "login.", "signin.", "sso.", "oauth.", "myaccount.")
+# Search engines: a way into other sites, not a task of their own.
+_SEARCH_HOSTS = {
+    "google.com",
+    "www.google.com",
+    "google.co.jp",
+    "www.google.co.jp",
+    "bing.com",
+    "www.bing.com",
+    "yahoo.co.jp",
+    "www.yahoo.co.jp",
+    "search.yahoo.co.jp",
+    "duckduckgo.com",
+}
+# Social media and video: not a work routine that automation can take over.
+_SNS_VIDEO_DOMAINS = (
+    "x.com",
+    "twitter.com",
+    "facebook.com",
+    "instagram.com",
+    "tiktok.com",
+    "youtube.com",
+    "netflix.com",
+)
+# Opens of one site closer together than this are one use (page to page in one task).
+SITE_USE_GAP_MINUTES = 30
+# The candidate list keeps this many of each kind; the rest are counted, not listed.
+MAX_PER_KIND = 5
+
+
+def _general_site(domain: str) -> bool:
+    return (
+        domain.startswith(_SIGN_IN_PREFIXES)
+        or domain in _SEARCH_HOSTS
+        or any(domain == d or domain.endswith("." + d) for d in _SNS_VIDEO_DOMAINS)
+    )
+
+
+def keep_top(candidates: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """The first MAX_PER_KIND of each kind from a ranked list, and how many were left out."""
+    kept, left_out = [], Counter()
+    for c in candidates:
+        if sum(1 for k in kept if k["kind"] == c["kind"]) < MAX_PER_KIND:
+            kept.append(c)
+        else:
+            left_out[c["kind"]] += 1
+    return kept, dict(left_out)
 
 
 def frequent_sites(
@@ -279,12 +325,19 @@ def frequent_sites(
     """Sites opened on many days (Past Import): a web task done again and again."""
     visited: dict[str, list] = defaultdict(list)
     people: dict[str, set] = defaultdict(set)
+    gap = timedelta(minutes=SITE_USE_GAP_MINUTES)
     for export in exports:
+        opens: dict[str, list] = defaultdict(list)
         for r in export.db.execute("SELECT domain, timestamp FROM browser_events"):
-            if r["domain"].startswith(_SIGN_IN_PREFIXES):
-                continue
-            visited[r["domain"]].append(local(r["timestamp"], tz))
-            people[r["domain"]].add(export.manifest.get("device_id", ""))
+            if not _general_site(r["domain"]):
+                opens[r["domain"]].append(local(r["timestamp"], tz))
+        for domain, times in opens.items():
+            last = None
+            for t in sorted(times):
+                if last is None or t - last >= gap:
+                    visited[domain].append(t)  # the start of one use
+                last = t
+            people[domain].add(export.manifest.get("device_id", ""))
 
     found = []
     for domain, times in visited.items():

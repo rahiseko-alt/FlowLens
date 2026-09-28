@@ -16,6 +16,7 @@ from flowlens.analyst.candidates import (
     Criteria,
     flows,
     frequent_sites,
+    keep_top,
     rank,
     scheduled_files,
     transfers,
@@ -101,11 +102,13 @@ def build_summary(
     pairs, without_paste, transfer_candidates = transfers(exports, tz, labels, criteria)
     summary["live"]["transfers"] = pairs
     summary["live"]["transfers_without_paste"] = without_paste
-    summary["candidates"] = rank(
-        scheduled_files(exports, tz, labels, criteria)
-        + frequent_sites(exports, tz, criteria)
-        + flows(exports, tz, criteria)
-        + transfer_candidates
+    summary["candidates"], summary["candidates_left_out"] = keep_top(
+        rank(
+            scheduled_files(exports, tz, labels, criteria)
+            + frequent_sites(exports, tz, criteria)
+            + flows(exports, tz, criteria)
+            + transfer_candidates
+        )
     )
     return summary, labels.table()
 
