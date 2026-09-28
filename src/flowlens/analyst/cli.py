@@ -20,6 +20,8 @@ from flowlens.analyst.reader import ExportError, open_export
 from flowlens.analyst.summary import build_summary
 
 SUMMARY_FILE = "analysis_summary.json"
+# Kept apart so the consultant never hands it to the AI with the summary.
+LABELS_FILE = Path("do_not_send_to_ai") / "labels.json"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -51,7 +53,7 @@ def main(
             for path in args.exports:
                 password = env_password or ask_password(f"{path.name} のパスワード: ")
                 opened.append(open_export(path, password, Path(work)))
-            summary = build_summary(opened, tz)
+            summary, labels = build_summary(opened, tz)
         except ExportError as exc:
             print(f"読み込めませんでした。{exc}", file=sys.stderr)
             return 1
@@ -59,9 +61,9 @@ def main(
             for export in opened:
                 export.db.close()
 
-    args.out.mkdir(parents=True, exist_ok=True)
-    (args.out / SUMMARY_FILE).write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    for name, content in ((SUMMARY_FILE, summary), (LABELS_FILE, labels)):
+        target = args.out / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(content, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"書き出しました: {args.out / SUMMARY_FILE}")
     return 0
