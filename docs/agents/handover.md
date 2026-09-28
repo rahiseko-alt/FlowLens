@@ -8,6 +8,25 @@
 
 ---
 
+## 2026-09-28 分析側の進め方を決めた
+
+**決めたこと**
+
+- 書き出しの確認: 利用者の PC で診断データの書き出しができた（開くには 7-Zip とパスワードが要る）
+- 分析側は、プログラムが先に数えて要約を作り、AI はその要約だけを読む。個人の比較や順位は出さない（`docs/adr/0006-analysis-counts-first-ai-reads-summary.md`）
+- 提案書は自動化の候補3〜5件を効果の大きい順に並べ、確認リストを付ける。過去30日分で初回版、記録分で最終版。用語は `CONTEXT.md`
+- 分析側は Claude Code が作る
+
+**次にやること**
+
+- `/to-spec` で分析側の仕様書を作る
+- `/to-tickets` で作業単位に割り、`/implement` で作る
+
+**未解決の問題**
+
+- 「繰り返し」とみなす基準（何回・何日以上か）は仕様書で決める
+- 実データで、記号の題名から業務を見分けられるかは未確認
+
 ## 2026-09-28 v0.2.2: FlowLens を見つけやすくした
 
 **決めたこと**
@@ -79,24 +98,4 @@
 **未解決の問題**
 
 - Windows 側は実機で動いた形跡が無い。直したあとも実機での確認が要る
-
-## 2026-09-27 実装は Gemini（Antigravity）に任せる。指示書を用意
-
-**決めたこと**
-
-- 実装は Antigravity 上の Gemini 3.8 Flash が行う。利用者はリポジトリの URL を渡すだけで、途中で指示しない。完成後に Claude Code がレビューして仕上げる
-- Gemini 用の指示書は `GEMINI.md`。`AGENTS.md` の冒頭と `README.md` からもそこへ案内している。Issue の写しは `docs/issues/`
-- Gemini は枝 `gemini/mvp` 1本で、決めた順に Issue を進め、Issue ごとの報告書を `docs/gemini-reports/` に残す。マージや Issue の close はしない
-
-**次にやること**
-
-- （済）https://github.com/rahiseko-alt/FlowLens/pull/1 と https://github.com/rahiseko-alt/FlowLens/pull/2 は main へ取り込み済み
-- 利用者が Antigravity に URL を渡して実装させる
-- 終わったら Claude Code で `gemini/mvp` を `/code-review` し、`docs/gemini-reports/summary.md` の質問に答え、仕上げる
-
-**未解決の問題**
-
-- Antigravity が `AGENTS.md` と `GEMINI.md` のどちらを優先するかは確証が無い（`AGENTS.md` の冒頭で `GEMINI.md` へ案内して補っている）
-- Antigravity が動く PC が Windows かどうかで、実機確認をどこまで Gemini が行えるかが変わる
-- 過去分の読み込み元で何が読めるかは、Windows 実機で未確認
 

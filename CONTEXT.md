@@ -75,3 +75,15 @@ _Avoid_: 操作ログ, 履歴
 **Workflow Candidate**:
 Analyst 側で、似た Operation Sequence が繰り返し現れたものを一つにまとめた業務候補。何の業務か判定できないものは Unknown Workflow とする。
 _Avoid_: 業務, タスク, パターン
+
+**Analysis Summary**:
+Analyst 側のプログラムが Diagnostic Export から数え上げた要約（アプリごとの時間、曜日・時間帯、繰り返し、転記の回数など）。AI が読むのはこれだけで、元の記録は渡さない。
+_Avoid_: 集計ログ, AI 入力
+
+**Proposal Report**:
+Analysis Summary をもとにした提案書。Workflow Candidate を効果の大きい順に3〜5件並べ、各件に回数・時間・根拠と「推定値である」旨を付ける。過去30日分だけで作る初回版（3日後のご提案）と、Live Capture を中心にした最終版がある。
+_Avoid_: レポート, 診断結果
+
+**確認リスト**:
+Proposal Report に付ける、社員に聞かないと分からない点の一覧（例:「ファイル A は何の表ですか」）。題名が記号のままなので、報告会で答えてもらい最終版に反映する。
+_Avoid_: 質問票, ヒアリングシート
