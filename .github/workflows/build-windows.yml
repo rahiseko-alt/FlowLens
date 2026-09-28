@@ -69,10 +69,24 @@ jobs:
           & $iscc "/DMyAppVersion=$version" installer\flowlens.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
+      - name: Build flowlens_analyst.exe (the consultant's analysis app, one file)
+        shell: pwsh
+        run: |
+          $md = Join-Path $PWD "src\flowlens\analyst\instructions_for_claude.md"
+          pyinstaller installer\analyst_entry.py --onefile --noconsole --noconfirm `
+            --name flowlens_analyst --paths src --collect-data tzdata `
+            --add-data "$md;flowlens/analyst" --distpath dist --workpath build\analyst
+          if ($LASTEXITCODE -ne 0) { throw "pyinstaller failed" }
+
+      - name: Packaged analysis app analyses a real export
+        run: python installer/analyst_smoke.py dist/flowlens_analyst.exe
+
       - uses: actions/upload-artifact@v4
         with:
           name: flowlens-installer
-          path: dist/installer/*.exe
+          path: |
+            dist/installer/*.exe
+            dist/flowlens_analyst.exe
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.version != '')
@@ -81,7 +95,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version || github.ref_name }}
         run: |
-          gh release create "$env:VERSION" dist/installer/flowlens_installer.exe `
+          gh release create "$env:VERSION" dist/installer/flowlens_installer.exe dist/flowlens_analyst.exe `
             --target "${{ github.sha }}" --prerelease `
             --title "FlowLens $env:VERSION（実機確認前）" `
-            --notes "社員の PC に入れるインストーラーです。Windows の実機ではまだ確認が済んでいません（docs/manual-checks.md）。初回は Windows の警告が出ます:「詳細情報」→「実行」。"
+            --notes "flowlens_installer.exe は社員の PC に入れるインストーラー、flowlens_analyst.exe はコンサルタントが診断データを分析するアプリ（インストール不要、ダブルクリックで起動）です。Windows の実機ではまだ確認が済んでいません（docs/manual-checks.md）。初回は Windows の警告が出ます:「詳細情報」→「実行」。"
