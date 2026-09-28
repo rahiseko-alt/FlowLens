@@ -8,6 +8,21 @@
 
 ---
 
+## 2026-09-28 分析側を8つの作業単位に分けて発行
+
+**決めたこと**
+
+- 仕様書 https://github.com/rahiseko-alt/FlowLens/issues/32 の子として、https://github.com/rahiseko-alt/FlowLens/issues/34 〜 https://github.com/rahiseko-alt/FlowLens/issues/41 の8件を発行した（すべて `ready-for-agent`。前提の作業は各本文の「Blocked by」）
+- 順序: 34（最小の一本道）→ 35・36 → 37 → 38・39・40 → 41
+
+**次にやること**
+
+- `/implement` で https://github.com/rahiseko-alt/FlowLens/issues/34 から作る
+
+**未解決の問題**
+
+- 基準（回数・日数・短い表示の秒数）が実データで妥当かは、最初の実データで見直す
+
 ## 2026-09-28 分析側の仕様書を発行
 
 **決めたこと**
@@ -80,24 +95,4 @@
 **未解決の問題**
 
 - 自動の起動確認は「部品が揃って記録できる」ことまで。画面・アイコン・フックが実際の操作で動くかは、実機でないと分からない
-
-## 2026-09-27 Collector を作り直して main に取り込んだ
-
-**決めたこと**
-
-- 利用者の指示「ここから先は Claude で完結」により、Gemini の成果をもとに Claude Code が中核と Windows 側を作り直した。https://github.com/rahiseko-alt/FlowLens/pull/24 で main に取り込んだ。https://github.com/rahiseko-alt/FlowLens/pull/23 は閉じた
-- 試験は61件合格（Linux）。Windows 側は実機では未確認
-- 結果・残る課題・プライバシー上の残りのリスクは `docs/development-report.md`。実機確認の手順は `docs/manual-checks.md`
-- パスワード管理アプリは初めから除外する。強制終了後は、タスク スケジューラが10分以内に起動し直す（社員が終了を選んだ場合は除く）
-
-**次にやること**
-
-- 利用者の Windows PC で `docs/manual-checks.md` を順に行う（配布物の作り方も同じ文書にある）
-- 見つかった問題を Issue にして直す。実機確認が済んだら、#15〜#18、#20〜#22 を閉じる
-- 分析側の設計を再開する（`/grill-with-docs` の Q1〜Q7 が回答待ち）
-
-**未解決の問題**
-
-- uiautomation の呼び出し、アドレスバーの識別、トレイメニュー、イベントログの時刻は、実機でないと正しいか分からない
-- 過去分で1時間ごとのアプリ使用時間は取れない（SRUM を読まないため）
 
