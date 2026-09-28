@@ -18,9 +18,12 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flowlens.analyst.candidates import Criteria
 from flowlens.analyst.reader import ExportError, merge_by_person, open_export
+from flowlens.analyst.report import INSTRUCTIONS, confirmation_questions
 from flowlens.analyst.summary import build_summary
 
 SUMMARY_FILE = "analysis_summary.json"
+QUESTIONS_FILE = "confirmation_questions.md"
+INSTRUCTIONS_FILE = "instructions_for_claude.md"
 # Kept apart so the consultant never hands it to the AI with the summary.
 LABELS_FILE = Path("do_not_send_to_ai") / "labels.json"
 
@@ -73,9 +76,15 @@ def main(
             for export in opened:
                 export.db.close()
 
-    for name, content in ((SUMMARY_FILE, summary), (LABELS_FILE, labels)):
+    outputs = {
+        SUMMARY_FILE: json.dumps(summary, ensure_ascii=False, indent=2),
+        QUESTIONS_FILE: confirmation_questions(summary),
+        INSTRUCTIONS_FILE: INSTRUCTIONS,
+        LABELS_FILE: json.dumps(labels, ensure_ascii=False, indent=2),
+    }
+    for name, text in outputs.items():
         target = args.out / name
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(content, ensure_ascii=False, indent=2), encoding="utf-8")
+        target.write_text(text, encoding="utf-8")
     print(f"書き出しました: {args.out / SUMMARY_FILE}")
     return 0
