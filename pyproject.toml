@@ -5,6 +5,7 @@ description = "FlowLens Collector"
 requires-python = ">=3.12"
 dependencies = [
     "pyzipper>=0.4.0",
+    "tzdata; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
