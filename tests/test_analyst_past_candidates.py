@@ -41,7 +41,7 @@ def test_a_site_used_on_many_days_is_a_candidate(recorder, tmp_path):
     assert len(found) == 1
     c = found[0]
     assert c["steps"] == ["trimmer.example.com"]
-    assert c["days"] == 6 and c["count"] == 12
+    assert c["days"] == 6 and c["count"] == 6  # two opens 10 minutes apart are one use
     assert c["timing"]["hour"] == 9
     assert c["monthly_minutes_estimate"] is None and "推定" in c["estimate_note"]
 
@@ -84,3 +84,33 @@ def test_a_site_candidate_gets_a_question(recorder, tmp_path):
     code, out = analyze(tmp_path, make_export(recorder, tmp_path))
     questions = (out / "confirmation_questions.md").read_text(encoding="utf-8")
     assert "trimmer.example.com" in questions and "6日" in questions
+
+
+def test_search_sns_and_video_sites_are_not_candidates(recorder, tmp_path):
+    for domain in (
+        "www.google.com",
+        "www.bing.com",
+        "www.youtube.com",
+        "x.com",
+        "myaccount.google.com",
+    ):
+        visits(recorder, domain, days=10)
+    visits(recorder, "docs.google.com", days=10)
+    assert [c["steps"][0] for c in sites(run(recorder, tmp_path))] == ["docs.google.com"]
+
+
+def test_opens_close_together_count_as_one_use(recorder, tmp_path):
+    visits(recorder, "crm.example.com", days=6, per_day=3)  # 3 opens within 20 minutes a day
+    c = sites(run(recorder, tmp_path))[0]
+    assert c["count"] == 6
+
+
+def test_at_most_five_candidates_of_a_kind(recorder, tmp_path):
+    for n in range(8):
+        visits(recorder, f"tool{n}.example.com", days=5 + n)
+    result = run(recorder, tmp_path)
+
+    assert [c["steps"][0] for c in sites(result)] == [
+        f"tool{n}.example.com" for n in (7, 6, 5, 4, 3)
+    ]
+    assert result["candidates_left_out"] == {"よく使うサイト": 3}
