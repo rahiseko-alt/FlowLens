@@ -16,7 +16,7 @@ from flowlens.analyst.candidates import Criteria, flows, rank, scheduled_files, 
 from flowlens.analyst.common import local as _local
 from flowlens.analyst.common import rows as _rows
 from flowlens.analyst.labels import Labeler
-from flowlens.analyst.reader import OpenedExport
+from flowlens.analyst.reader import OpenedExport, record_counts
 
 ANALYSIS_VERSION = 1
 FEW_LIVE_DAYS = 3  # below this, the summary warns that candidates are weak
@@ -46,15 +46,19 @@ def _reason(error: str | None) -> str:
 
 
 def build_summary(
-    exports: list[OpenedExport], tz: tzinfo, criteria: Criteria = Criteria()
+    exports: list[OpenedExport], tz: tzinfo, criteria: Criteria = Criteria(), files: int = 0
 ) -> tuple[dict[str, Any], dict[str, str]]:
-    """Returns (Analysis Summary, label -> symbol table)."""
+    """Returns (Analysis Summary, label -> symbol table).
+
+    `exports` holds one entry per person (see merge_by_person); `files` is how many
+    files they came from.
+    """
     labels = Labeler()
     summary = {
         "analysis_version": ANALYSIS_VERSION,
         "time_zone": str(tz),
         "criteria": {"min_days": criteria.min_days, "min_count": criteria.min_count},
-        "basis": _basis(exports, tz),
+        "basis": _basis(exports, tz, files or len(exports)),
         "live": _live(exports, tz, labels),
         "past": _past(exports, tz, labels),
     }
@@ -69,11 +73,9 @@ def build_summary(
     return summary, labels.table()
 
 
-def _basis(exports: list[OpenedExport], tz: tzinfo) -> dict[str, Any]:
-    record_counts: Counter[str] = Counter()
+def _basis(exports: list[OpenedExport], tz: tzinfo, files: int) -> dict[str, Any]:
     removed: Counter[str] = Counter()
     for export in exports:
-        record_counts.update(export.manifest.get("record_counts", {}))
         for key, value in export.redaction.items():
             if isinstance(value, int):
                 removed[key] += value
@@ -88,14 +90,14 @@ def _basis(exports: list[OpenedExport], tz: tzinfo) -> dict[str, Any]:
             "日数が増えるまで参考程度に扱ってください。"
         )
     return {
-        "files": len(exports),
+        "files": files,
         "people": len({e.manifest.get("device_id") for e in exports}),
         "period": {
             "start": _local(min(e.manifest["period_start"] for e in exports), tz).isoformat(),
             "end": _local(max(e.manifest["period_end"] for e in exports), tz).isoformat(),
         },
         "live_days": len(live_days),
-        "record_counts": dict(sorted(record_counts.items())),
+        "record_counts": record_counts(exports),
         "removed_on_export": dict(sorted(removed.items())),
         "notes": notes,
     }

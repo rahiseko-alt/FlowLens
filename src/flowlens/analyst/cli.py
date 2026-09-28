@@ -17,7 +17,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flowlens.analyst.candidates import Criteria
-from flowlens.analyst.reader import ExportError, open_export
+from flowlens.analyst.reader import ExportError, merge_by_person, open_export
 from flowlens.analyst.summary import build_summary
 
 SUMMARY_FILE = "analysis_summary.json"
@@ -61,7 +61,10 @@ def main(
                 password = env_password or ask_password(f"{path.name} のパスワード: ")
                 opened.append(open_export(path, password, Path(work)))
             summary, labels = build_summary(
-                opened, tz, Criteria(min_days=args.min_days, min_count=args.min_count)
+                merge_by_person(opened),
+                tz,
+                Criteria(min_days=args.min_days, min_count=args.min_count),
+                files=len(opened),
             )
         except ExportError as exc:
             print(f"読み込めませんでした。{exc}", file=sys.stderr)
