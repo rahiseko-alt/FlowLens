@@ -4,6 +4,26 @@ handover.md の保存上限（5 件）を超えて押し出された古いメモ
 会話開始時には読み込まれない。過去の経緯を掘り返すときだけ開く。新しいものを一番上に来るよう足す。
 
 ---
+## 2026-09-27 実装は Gemini（Antigravity）に任せる。指示書を用意
+
+**決めたこと**
+
+- 実装は Antigravity 上の Gemini 3.8 Flash が行う。利用者はリポジトリの URL を渡すだけで、途中で指示しない。完成後に Claude Code がレビューして仕上げる
+- Gemini 用の指示書は `GEMINI.md`。`AGENTS.md` の冒頭と `README.md` からもそこへ案内している。Issue の写しは `docs/issues/`
+- Gemini は枝 `gemini/mvp` 1本で、決めた順に Issue を進め、Issue ごとの報告書を `docs/gemini-reports/` に残す。マージや Issue の close はしない
+
+**次にやること**
+
+- （済）https://github.com/rahiseko-alt/FlowLens/pull/1 と https://github.com/rahiseko-alt/FlowLens/pull/2 は main へ取り込み済み
+- 利用者が Antigravity に URL を渡して実装させる
+- 終わったら Claude Code で `gemini/mvp` を `/code-review` し、`docs/gemini-reports/summary.md` の質問に答え、仕上げる
+
+**未解決の問題**
+
+- Antigravity が `AGENTS.md` と `GEMINI.md` のどちらを優先するかは確証が無い（`AGENTS.md` の冒頭で `GEMINI.md` へ案内して補っている）
+- Antigravity が動く PC が Windows かどうかで、実機確認をどこまで Gemini が行えるかが変わる
+- 過去分の読み込み元で何が読めるかは、Windows 実機で未確認
+
 ## 2026-09-27 仕様書を19個の作業単位に割って発行
 
 **決めたこと**
