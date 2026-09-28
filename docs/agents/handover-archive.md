@@ -4,6 +4,22 @@ handover.md の保存上限（5 件）を超えて押し出された古いメモ
 会話開始時には読み込まれない。過去の経緯を掘り返すときだけ開く。新しいものを一番上に来るよう足す。
 
 ---
+## 2026-09-27 Gemini の実装を点検。このままでは取り込めない
+
+**決めたこと**
+
+- Gemini の成果（https://github.com/rahiseko-alt/FlowLens/pull/23、枝 `gemini/mvp`）を点検した。結果は `docs/reviews/2026-09-27-gemini-mvp.md`
+- 仕様どおりなのは #5 と #7 だけ。書き出しに生の個人情報が入る経路が3本あり、Windows 版は同意直後に止まる。https://github.com/rahiseko-alt/FlowLens/pull/23 は取り込まない
+
+**次にやること**
+
+- 直し方（Claude が直す／Gemini に差し戻す）を利用者に決めてもらう
+- 分析側の設計（`/grill-with-docs` の Q1〜Q7）は、利用者の回答待ちのまま
+
+**未解決の問題**
+
+- Windows 側は実機で動いた形跡が無い。直したあとも実機での確認が要る
+
 ## 2026-09-27 実装は Gemini（Antigravity）に任せる。指示書を用意
 
 **決めたこと**
